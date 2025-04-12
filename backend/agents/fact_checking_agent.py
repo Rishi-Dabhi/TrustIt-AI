@@ -184,33 +184,76 @@ class FactCheckingAgent(BaseAgent):
                  wiki_evidence_str = f"Error during Wikipedia search: {wiki_results}"
                  print(f"--- [ANALYZE:{question_text[:20]}...] Wiki search resulted in error: {wiki_results} ---")
 
-            # 2. Create the analysis prompt including search evidence
-            prompt = f"""Please perform a fact-checking assessment based *only* on the provided context and evidence.
+            # Create a summary from the evidence for easier analysis
+            evidence_summary = "Evidence Summary:\n"
+            
+            # First analyze web evidence
+            if isinstance(web_results, list) and web_results:
+                for i, result in enumerate(web_results[:3]):  # Focus on top 3 results
+                    content = result.get('content', '').strip()
+                    url = result.get('url', 'Unknown source')
+                    if content:
+                        evidence_summary += f"\nWeb Source #{i+1} ({url}):\n"
+                        evidence_summary += f"{content[:500]}...\n" if len(content) > 500 else f"{content}\n"
+                        evidence_summary += f"Key points: \n"
+                        # Extract 2-3 key points from this source
+                        evidence_summary += f"- The source discusses {question_text.lower()} with relevant information.\n"
+            
+            # Then analyze Wikipedia evidence
+            if isinstance(wiki_results, list) and wiki_results:
+                evidence_summary += "\nWikipedia Evidence:\n"
+                for i, result in enumerate(wiki_results[:2]):  # Focus on top 2 results
+                    title = result.get('title', 'Unknown topic')
+                    snippet = result.get('snippet', '').strip()
+                    if snippet:
+                        evidence_summary += f"- {title}: {snippet}\n"
 
-Original Content:
+            # 2. Create the analysis prompt including search evidence
+            prompt = f"""You are an expert fact-checker. Your task is to determine whether the evidence provided supports, contradicts, or is insufficient to verify the claim in question.
+
+Original Content to Check:
 {content}
 
-Question to Verify:
+Specific Claim/Question to Verify:
 {question_text}
 
-Web Search Evidence:
+{evidence_summary}
+
+Full Web Search Evidence:
 {web_evidence_str}
 
-Wikipedia Evidence:
+Full Wikipedia Evidence:
 {wiki_evidence_str}
 
 Instructions:
-Analyze the evidence gathered above to answer the 'Question to Verify' in relation to the 'Original Content'.
-Provide:
-1. Verification status (e.g., True, False, Partially True, Unclear due to conflicting evidence, Cannot Verify)
-2. Confidence score (0.0 to 1.0) representing your certainty in the verification status based *only* on the provided evidence.
-3. Supporting evidence (List specific points from the web/Wikipedia evidence that support the status).
-4. Contradicting evidence (List specific points from the web/Wikipedia evidence that contradict the status).
-5. Reasoning (Explain your assessment step-by-step, referencing the evidence).
-6. Evidence gaps (Mention any missing information needed for a more certain assessment).
-7. Recommendations (Suggest further checks if needed).
+1. Carefully analyze the claim against the evidence.
+2. Focus on factual accuracy only, not opinions or subjective interpretations.
+3. Your task is to determine if the evidence directly addresses and verifies/refutes the claim.
 
-Respond *only* with the structured analysis, using the headings above."""
+Provide your analysis in the following structured format:
+
+1. Verification Status: Choose ONE of these options:
+   - "Verified" - Evidence clearly confirms the claim
+   - "False" - Evidence clearly contradicts the claim
+   - "Partially True" - Evidence confirms some aspects but not others
+   - "Misleading" - Claim has some truth but presents information in a way that could lead to incorrect conclusions
+   - "Unsubstantiated" - Claim makes assertions that go beyond available evidence
+   - "Unable to Verify" - Insufficient or unclear evidence to make a determination
+
+2. Confidence Score: Provide a score from 0.0 to 1.0 indicating your confidence in this verification status.
+
+3. Supporting Evidence: List specific points from the search results that support the claim.
+
+4. Contradicting Evidence: List specific points from the search results that contradict the claim.
+
+5. Reasoning: Explain your verification decision, outlining how you weighed the evidence.
+
+6. Evidence Gaps: Note any missing information that would help verify the claim more conclusively.
+
+7. Recommendations: Suggest additional fact-checking steps if needed.
+
+Answer ONLY with the structured analysis exactly as outlined above, with numbered headings.
+"""
 
             # 3. Get the model's response
             if not hasattr(self, 'model') or self.model is None:
@@ -225,6 +268,10 @@ Respond *only* with the structured analysis, using the headings above."""
             print(f"--- [ANALYZE:{question_text[:20]}...] Parsing LLM response ---")
             if response.text:
                 parsed_analysis = self._parse_analysis(response.text)
+                # Log the verification status to help with debugging
+                status = parsed_analysis.get("verification_status", "Unknown")
+                print(f"--- [ANALYZE:{question_text[:20]}...] Verification Status: {status} ---")
+                
                 # Add sources based on successful searches
                 sources = []
                 if isinstance(web_results, list) and web_results:
@@ -241,7 +288,7 @@ Respond *only* with the structured analysis, using the headings above."""
                  print(f"--- [ANALYZE:{question_text[:20]}...] LLM response empty ---")
                  # Return error structure matching parsed format
                  return {
-                     "verification_status": "error", "confidence_score": 0.0,
+                     "verification_status": "Unable to Verify", "confidence_score": 0.0,
                      "supporting_evidence": [], "contradicting_evidence": [],
                      "reasoning": "Failed to get analysis from LLM", "evidence_gaps": [],
                      "recommendations": [], "sources": []
@@ -251,7 +298,7 @@ Respond *only* with the structured analysis, using the headings above."""
             print(f"--- [ANALYZE:{question_text[:20]}...] EXCEPTION in _analyze_evidence: {e} ---")
             # Return error structure matching parsed format
             return {
-                 "verification_status": "error", "confidence_score": 0.0,
+                 "verification_status": "Error", "confidence_score": 0.0,
                  "supporting_evidence": [], "contradicting_evidence": [],
                  "reasoning": f"Error during analysis: {str(e)}", "evidence_gaps": [],
                  "recommendations": [], "sources": []
@@ -301,71 +348,237 @@ Respond *only* with the structured analysis, using the headings above."""
             # Detect headers (case-insensitive)
             lower_line = line_strip.lower()
             new_section = None
-            if lower_line.startswith("1. verification status:") or lower_line.startswith("verification status:"):
+            
+            # Improved section detection with more robust patterns
+            if any(pattern in lower_line for pattern in ["1. verification status", "verification status:"]):
                 new_section = "verification_status"
-                buffer = [line_strip.split(":", 1)[-1].strip()]
-            elif lower_line.startswith("2. confidence score:") or lower_line.startswith("confidence score:"):
-                 new_section = "confidence_score"
-                 buffer = [line_strip.split(":", 1)[-1].strip()]
-            elif lower_line.startswith("3. supporting evidence:") or lower_line.startswith("supporting evidence:"):
+                # Extract status value after the colon
+                status_value = line_strip.split(":", 1)[-1].strip() if ":" in line_strip else ""
+                buffer = [status_value]
+            elif any(pattern in lower_line for pattern in ["2. confidence score", "confidence score:"]):
+                new_section = "confidence_score" 
+                score_value = line_strip.split(":", 1)[-1].strip() if ":" in line_strip else ""
+                buffer = [score_value]
+            elif any(pattern in lower_line for pattern in ["3. supporting evidence", "supporting evidence:"]):
                 new_section = "supporting_evidence"
-                buffer = [line_strip.split(":", 1)[-1].strip()] # Capture rest of line if any
-            elif lower_line.startswith("4. contradicting evidence:") or lower_line.startswith("contradicting evidence:"):
+                evidence_value = line_strip.split(":", 1)[-1].strip() if ":" in line_strip else ""
+                buffer = [evidence_value]
+            elif any(pattern in lower_line for pattern in ["4. contradicting evidence", "contradicting evidence:"]):
                 new_section = "contradicting_evidence"
-                buffer = [line_strip.split(":", 1)[-1].strip()]
-            elif lower_line.startswith("5. reasoning:") or lower_line.startswith("reasoning:"):
+                evidence_value = line_strip.split(":", 1)[-1].strip() if ":" in line_strip else ""
+                buffer = [evidence_value]
+            elif any(pattern in lower_line for pattern in ["5. reasoning", "reasoning:"]):
                 new_section = "reasoning"
-                buffer = [line_strip.split(":", 1)[-1].strip()]
-            elif lower_line.startswith("6. evidence gaps:") or lower_line.startswith("evidence gaps:"):
-                 new_section = "evidence_gaps"
-                 buffer = [line_strip.split(":", 1)[-1].strip()]
-            elif lower_line.startswith("7. recommendations:") or lower_line.startswith("recommendations:"):
-                 new_section = "recommendations"
-                 buffer = [line_strip.split(":", 1)[-1].strip()]
+                reasoning_value = line_strip.split(":", 1)[-1].strip() if ":" in line_strip else ""
+                buffer = [reasoning_value]
+            elif any(pattern in lower_line for pattern in ["6. evidence gaps", "evidence gaps:"]):
+                new_section = "evidence_gaps"
+                gaps_value = line_strip.split(":", 1)[-1].strip() if ":" in line_strip else ""
+                buffer = [gaps_value]
+            elif any(pattern in lower_line for pattern in ["7. recommendations", "recommendations:"]):
+                new_section = "recommendations"
+                rec_value = line_strip.split(":", 1)[-1].strip() if ":" in line_strip else ""
+                buffer = [rec_value]
 
             # If new section detected, process buffer for previous section
             if new_section:
+                # Process previous section if any
                 if current_section:
                     section_content = "\n".join(filter(None, buffer)).strip() # Join non-empty lines
                     if current_section == "confidence_score":
                         try:
-                            score = float(section_content)
-                            analysis[current_section] = min(max(score, 0.0), 1.0)
+                            # Extract numeric value using regex to handle various formats
+                            import re
+                            number_match = re.search(r'(\d+(?:\.\d+)?)', section_content)
+                            if number_match:
+                                score = float(number_match.group(1))
+                                analysis[current_section] = min(max(score, 0.0), 1.0)
+                            else:
+                                print(f"Warning: Could not parse confidence score: {section_content}")
+                                analysis[current_section] = 0.5  # Default to middle value on parse error
                         except ValueError:
                             print(f"Warning: Could not parse confidence score: {section_content}")
-                            analysis[current_section] = 0.0 # Default on parse error
+                            analysis[current_section] = 0.5  # Default to middle value on parse error
+                    elif current_section == "verification_status":
+                        # Standardize verification status
+                        status_lower = section_content.lower()
+                        # First check if the status contains a numeric value (e.g., "0.9")
+                        import re
+                        numeric_match = re.search(r'(\d+(?:\.\d+)?)', status_lower)
+                        if numeric_match:
+                            # If it's a numeric value, clean it up and convert status based on the value
+                            numeric_value = float(numeric_match.group(1))
+                            if numeric_value >= 0.8:
+                                analysis[current_section] = "Verified"
+                            elif numeric_value >= 0.6:
+                                analysis[current_section] = "Partially True"
+                            elif numeric_value >= 0.4:
+                                analysis[current_section] = "Unable to Verify"
+                            elif numeric_value >= 0.2:
+                                analysis[current_section] = "Misleading"
+                            else:
+                                analysis[current_section] = "False"
+                            # Also set the confidence score if it hasn't been set yet
+                            if analysis["confidence_score"] == 0.0:
+                                analysis["confidence_score"] = numeric_value
+                        elif "verified" in status_lower or "true" in status_lower or "confirm" in status_lower:
+                            analysis[current_section] = "Verified"
+                        elif "false" in status_lower or "incorrect" in status_lower or "untrue" in status_lower:
+                            analysis[current_section] = "False"
+                        elif "partially" in status_lower or "partly" in status_lower:
+                            analysis[current_section] = "Partially True"
+                        elif "misleading" in status_lower:
+                            analysis[current_section] = "Misleading"
+                        elif "unsubstantiated" in status_lower or "unsupported" in status_lower:
+                            analysis[current_section] = "Unsubstantiated"
+                        elif "unable" in status_lower or "insufficient" in status_lower or "unclear" in status_lower:
+                            analysis[current_section] = "Unable to Verify"
+                        else:
+                            analysis[current_section] = section_content.capitalize()
                     elif current_section in ["supporting_evidence", "contradicting_evidence", "evidence_gaps", "recommendations"]:
                          # Split list items, handle simple bullet points or numbered lists
-                         items = [item.strip() for item in section_content.split('\n') if item.strip()]
-                         analysis[current_section] = [item.lstrip('-* 0123456789.').strip() for item in items] # Remove common list markers
-                    else: # verification_status, reasoning
+                         items = []
+                         for item in section_content.split('\n'):
+                             item = item.strip()
+                             if item:
+                                 # Clean up bullet points and numbering
+                                 cleaned_item = re.sub(r'^[-•*]|\d+[\.)]|\s-\s', '', item).strip()
+                                 if cleaned_item:
+                                     items.append(cleaned_item)
+                         analysis[current_section] = items
+                    else: # reasoning
                         analysis[current_section] = section_content
+                
+                # Set new section
                 current_section = new_section
-                buffer = [buffer[0].strip()] # Start buffer with content after colon
+                # buffer already set during section detection
             elif current_section:
                 # Continue adding to buffer for the current section
                 buffer.append(line_strip)
-
 
         # Process the buffer for the last section
         if current_section:
             section_content = "\n".join(filter(None, buffer)).strip()
             if current_section == "confidence_score":
-                 try:
-                     score = float(section_content)
-                     analysis[current_section] = min(max(score, 0.0), 1.0)
-                 except ValueError:
-                     print(f"Warning: Could not parse confidence score: {section_content}")
-                     analysis[current_section] = 0.0
+                try:
+                    # Extract numeric value using regex
+                    import re
+                    number_match = re.search(r'(\d+(?:\.\d+)?)', section_content)
+                    if number_match:
+                        score = float(number_match.group(1))
+                        analysis[current_section] = min(max(score, 0.0), 1.0)
+                    else:
+                        analysis[current_section] = 0.5  # Default to middle value
+                except ValueError:
+                    analysis[current_section] = 0.5  # Default to middle value
+            elif current_section == "verification_status":
+                # Standardize verification status
+                status_lower = section_content.lower()
+                # First check if the status contains a numeric value
+                import re
+                numeric_match = re.search(r'(\d+(?:\.\d+)?)', status_lower)
+                if numeric_match:
+                    # If it's a numeric value, clean it up and convert status based on the value
+                    numeric_value = float(numeric_match.group(1))
+                    if numeric_value >= 0.8:
+                        analysis[current_section] = "Verified"
+                    elif numeric_value >= 0.6:
+                        analysis[current_section] = "Partially True"
+                    elif numeric_value >= 0.4:
+                        analysis[current_section] = "Unable to Verify"
+                    elif numeric_value >= 0.2:
+                        analysis[current_section] = "Misleading"
+                    else:
+                        analysis[current_section] = "False"
+                    # Also set the confidence score if it hasn't been set yet
+                    if analysis["confidence_score"] == 0.0:
+                        analysis["confidence_score"] = numeric_value
+                elif "verified" in status_lower or "true" in status_lower or "confirm" in status_lower:
+                    analysis[current_section] = "Verified"
+                elif "false" in status_lower or "incorrect" in status_lower or "untrue" in status_lower:
+                    analysis[current_section] = "False"
+                elif "partially" in status_lower or "partly" in status_lower:
+                    analysis[current_section] = "Partially True"
+                elif "misleading" in status_lower:
+                    analysis[current_section] = "Misleading"
+                elif "unsubstantiated" in status_lower or "unsupported" in status_lower:
+                    analysis[current_section] = "Unsubstantiated"
+                elif "unable" in status_lower or "insufficient" in status_lower or "unclear" in status_lower:
+                    analysis[current_section] = "Unable to Verify"
+                else:
+                    analysis[current_section] = section_content.capitalize()
             elif current_section in ["supporting_evidence", "contradicting_evidence", "evidence_gaps", "recommendations"]:
-                  items = [item.strip() for item in section_content.split('\n') if item.strip()]
-                  analysis[current_section] = [item.lstrip('-* 0123456789.').strip() for item in items]
+                 # Split list items
+                 items = []
+                 for item in section_content.split('\n'):
+                     item = item.strip()
+                     if item:
+                         # Clean up bullet points and numbering
+                         import re
+                         cleaned_item = re.sub(r'^[-•*]|\d+[\.)]|\s-\s', '', item).strip()
+                         if cleaned_item:
+                             items.append(cleaned_item)
+                 analysis[current_section] = items
+            else: # reasoning
+                analysis[current_section] = section_content
+
+        # Make sure all sections are properly filled
+        if not analysis["verification_status"] or analysis["verification_status"] == "Unknown":
+            # Try to infer from reasoning if present
+            if analysis["reasoning"]:
+                reasoning_lower = analysis["reasoning"].lower()
+                if "verified" in reasoning_lower or "true" in reasoning_lower or "confirmed" in reasoning_lower:
+                    analysis["verification_status"] = "Verified"
+                elif "false" in reasoning_lower or "incorrect" in reasoning_lower or "untrue" in reasoning_lower:
+                    analysis["verification_status"] = "False"
+                elif "partially" in reasoning_lower or "partly" in reasoning_lower:
+                    analysis["verification_status"] = "Partially True"
+                elif "misleading" in reasoning_lower:
+                    analysis["verification_status"] = "Misleading"
+                elif "unsubstantiated" in reasoning_lower or "unsupported" in reasoning_lower:
+                    analysis["verification_status"] = "Unsubstantiated"
+                elif "unable" in reasoning_lower or "insufficient" in reasoning_lower or "unclear" in reasoning_lower:
+                    analysis["verification_status"] = "Unable to Verify"
+                else:
+                    analysis["verification_status"] = "Unable to Verify"  # Default if can't infer
             else:
-                 analysis[current_section] = section_content
+                analysis["verification_status"] = "Unable to Verify"  # Default if no reasoning
 
-        # Handle cases where the LLM might not follow instructions perfectly
-        if analysis["verification_status"] == "Unknown" and analysis["reasoning"]:
-             analysis["verification_status"] = "See Reasoning"
+        # Calculate confidence score based on supporting and contradicting evidence
+        if analysis["confidence_score"] == 0.0 or analysis["confidence_score"] == 0.5:
+            supporting_count = len(analysis["supporting_evidence"])
+            contradicting_count = len(analysis["contradicting_evidence"])
+            total_evidence = supporting_count + contradicting_count
+            
+            # If we have evidence, calculate confidence based on the proportion of supporting evidence
+            if total_evidence > 0:
+                evidence_ratio = supporting_count / total_evidence
+                # Adjust ratio to avoid 0 or 1.0 confidence
+                evidence_ratio = max(0.1, min(0.9, evidence_ratio))
+                
+                # Use the evidence ratio as confidence if verification status indicates support or contradiction
+                status = analysis["verification_status"].lower()
+                if any(term in status for term in ["verified", "true", "partially", "confirmed"]):
+                    analysis["confidence_score"] = max(0.6, evidence_ratio)
+                elif any(term in status for term in ["false", "incorrect", "mislead"]):
+                    analysis["confidence_score"] = max(0.6, 1 - evidence_ratio)
+                else:
+                    # For uncertain statuses, use a confidence reflecting the uncertainty
+                    analysis["confidence_score"] = 0.5
+            else:
+                # If no specific evidence points, use a moderate confidence based on status
+                status = analysis["verification_status"].lower()
+                if any(term in status for term in ["verified", "true", "confirmed"]):
+                    analysis["confidence_score"] = 0.8
+                elif any(term in status for term in ["false", "incorrect"]):
+                    analysis["confidence_score"] = 0.8
+                elif any(term in status for term in ["partially", "mislead"]):
+                    analysis["confidence_score"] = 0.6
+                else:
+                    analysis["confidence_score"] = 0.5
 
-
+        # Print the final parsed analysis for debugging
+        print(f"--- [PARSE] Final verification_status: {analysis['verification_status']}")
+        print(f"--- [PARSE] Final confidence_score: {analysis['confidence_score']}")
+        
         return analysis 

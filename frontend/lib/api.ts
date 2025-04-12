@@ -2,8 +2,20 @@
 const API_BASE_URL = 'http://localhost:8002';
 
 export interface ProcessResponse {
-  questions?: string[];
-  facts?: any[];
+  initial_questions?: string[];
+  fact_checks?: any[];
+  follow_up_questions?: any[];
+  recommendations?: string[];
+  judgment?: string;
+  judgment_reason?: string;
+  metadata?: {
+    confidence_scores?: {
+      question_generator?: number;
+      fact_checking?: number;
+      follow_up_generator?: number;
+      judge?: number;
+    }
+  };
   error?: string;
 }
 
@@ -32,8 +44,8 @@ export async function processContent(content: string): Promise<ProcessResponse> 
     console.error('Error processing content:', error);
     return { 
       error: error instanceof Error ? error.message : 'An unknown error occurred',
-      questions: [],
-      facts: []
+      initial_questions: [],
+      fact_checks: []
     };
   }
 } 

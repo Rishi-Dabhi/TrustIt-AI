@@ -11,6 +11,7 @@ from typing import Dict, Any, List
 from .agents import (
     FactCheckingAgent,
     QuestionGeneratorAgent,
+    JudgeAgent,  # Import the JudgeAgent
 )
 from .services.search_service import SearchService
 from .config import load_config # Assuming config.py is in the same directory
@@ -26,6 +27,7 @@ async def process_content(content: str, config: Dict[str, Any]) -> Dict[str, Any
         # Initialize agents
         fact_checker = FactCheckingAgent(config)
         question_generator = QuestionGeneratorAgent(config)
+        judge_agent = JudgeAgent(config)  # Initialize the JudgeAgent
         
         print("\nGenerating initial questions...")
         # Generate initial questions
@@ -77,17 +79,24 @@ async def process_content(content: str, config: Dict[str, Any]) -> Dict[str, Any
         recommendations_placeholder = [] # Placeholder
         follow_up_confidence_placeholder = 0.0 # Placeholder
 
+        # Make final judgment using JudgeAgent
+        print("\nMaking final judgment...")
+        judgment_result = judge_agent.judge(fact_checks["fact_checks"])
+
         return {
             "initial_questions": questions_result["questions"],
             "fact_checks": fact_checks["fact_checks"],
             "follow_up_questions": follow_up_questions_placeholder, # Use placeholder
             "recommendations": recommendations_placeholder, # Use placeholder
+            "judgment": judgment_result["judgment"],  # Include judgment in the result
+            "judgment_reason": judgment_result.get("reason", ""),  # Include the reasoning behind the judgment
             "metadata": {
                 "confidence_scores": {
                     "question_generator": questions_result.get("confidence_score", 0.0),
                     "fact_checking": fact_checks.get("confidence_score", 0.0),
                     # "question_generator": review_result.get("confidence_score", 0.0) # Commented out
-                    "follow_up_generator": follow_up_confidence_placeholder # Placeholder
+                    "follow_up_generator": follow_up_confidence_placeholder, # Placeholder
+                    "judge": judgment_result["confidence_score"]  # Add judge confidence score
                 }
             }
         }
@@ -122,6 +131,13 @@ async def main():
             print("\n" + "="*50)
             print("      FACT-CHECKING ANALYSIS RESULTS      ")
             print("="*50)
+            
+            # Display Final Judgment first for quick reference
+            print(f"\nFINAL JUDGMENT: {result['judgment'].upper()}")
+            print(f"Confidence Score: {result['metadata']['confidence_scores']['judge']:.2f}")
+            if "judgment_reason" in result and result["judgment_reason"]:
+                print(f"Reasoning: {result['judgment_reason']}")
+            
             print("\nInitial Questions:")
             for q in result["initial_questions"]:
                 print(f"- {q}")

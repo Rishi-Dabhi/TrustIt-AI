@@ -30,6 +30,8 @@ interface AnalysisResult {
   follow_up_questions?: string[]; // Added, though currently unused
   recommendations?: string[];   // Added, though currently unused
   metadata?: any;              // Added, though currently unused
+  judgment?: string;           // Added: overall judgment from JudgeAgent
+  judgment_reason?: string;    // Added: reasoning behind the judgment
   error?: string;
 }
 
@@ -79,6 +81,26 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
     )
   }
 
+  // Helper function to get the appropriate color for the judgment
+  const getJudgmentColor = (judgment: string) => {
+    switch(judgment?.toLowerCase()) {
+      case 'real':
+        return 'bg-green-100 text-green-800 border-green-200';
+      case 'fake':
+        return 'bg-red-100 text-red-800 border-red-200';
+      case 'uncertain':
+      default:
+        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+    }
+  }
+
+  // Get the confidence score for judgment from metadata if available
+  const getJudgmentConfidence = () => {
+    return result?.metadata?.confidence_scores?.judge 
+      ? `${(result.metadata.confidence_scores.judge * 100).toFixed(0)}%`
+      : 'N/A';
+  }
+
   return (
     <div className="container mx-auto px-4 py-8">
       <Card>
@@ -93,6 +115,30 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
             </Alert>
           ) : (
             <>
+              {/* Final Judgment Section */}
+              {result.judgment && (
+                <div className="mb-8">
+                  <div className={`p-4 rounded-lg border ${getJudgmentColor(result.judgment)}`}>
+                    <h2 className="text-xl font-bold mb-2">Final Judgment</h2>
+                    <div className="flex items-center justify-between">
+                      <p className="text-3xl font-extrabold">
+                        {result.judgment.toUpperCase()}
+                      </p>
+                      <div className="text-right">
+                        <p className="text-sm">Confidence</p>
+                        <p className="text-xl font-bold">{getJudgmentConfidence()}</p>
+                      </div>
+                    </div>
+                    {result.judgment_reason && (
+                      <div className="mt-4 pt-3 border-t border-gray-200">
+                        <p className="text-sm font-medium">Reasoning:</p>
+                        <p className="text-sm">{result.judgment_reason}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="mb-6">
                 <h3 className="text-lg font-semibold mb-2">Initial Questions Generated</h3>
                 {result.initial_questions && result.initial_questions.length > 0 ? (
