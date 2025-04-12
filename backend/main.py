@@ -14,9 +14,11 @@ from .agents import (
     JudgeAgent,  # Import the JudgeAgent
 )
 from .services.search_service import SearchService
+from .portia_integration import PortiaFactChecker  # Import the new Portia integration
 from .config import load_config # Assuming config.py is in the same directory
 from .utils import setup_environment # Assuming utils is a subdirectory
 
+# Keep the original process_content for backward compatibility
 async def process_content(content: str, config: Dict[str, Any]) -> Dict[str, Any]:
     """Process content through the agent pipeline"""
     try:
@@ -125,6 +127,23 @@ async def process_content(content: str, config: Dict[str, Any]) -> Dict[str, Any
         traceback.print_exc()
         return {"error": str(e)}
 
+# New function that uses Portia integration
+async def process_content_with_portia(content: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    """Process content through the Portia-based agent pipeline"""
+    try:
+        print("\nInitializing Portia fact checker...")
+        portia_checker = PortiaFactChecker(config)
+        
+        print("\nProcessing content with Portia...")
+        result = await portia_checker.process_content(content)
+        
+        return result
+        
+    except Exception as e:
+        print(f"\nError in Portia processing pipeline: {str(e)}")
+        traceback.print_exc()
+        return {"error": str(e)}
+
 async def main():
     """Main function to run the application"""
     # Setup environment and configuration
@@ -142,8 +161,17 @@ async def main():
         jobs than they eliminate.
         """
         
-        # Process the content
-        result = await process_content(test_content, config)
+        # Choose which processing method to use (original or Portia)
+        use_portia = True  # Set to False to use the original pipeline
+        
+        if use_portia:
+            # Process with Portia
+            result = await process_content_with_portia(test_content, config)
+            print("\nUsing Portia for fact-checking")
+        else:
+            # Process with original pipeline
+            result = await process_content(test_content, config)
+            print("\nUsing original pipeline for fact-checking")
         
         # Display results
         if "error" not in result:
@@ -153,7 +181,7 @@ async def main():
             
             # Display Final Judgment first for quick reference
             print(f"\nFINAL JUDGMENT: {result['judgment'].upper()}")
-            print(f"Confidence Score: {result['metadata']['confidence_scores']['judge']:.2f}")
+            print(f"Confidence Score: {result['metadata']['confidence_scores'].get('judge', 0.0):.2f}")
             if "judgment_reason" in result and result["judgment_reason"]:
                 print(f"Reasoning: {result['judgment_reason']}")
             
@@ -163,19 +191,22 @@ async def main():
             
             print("\nFact Checks:")
             for check in result["fact_checks"]:
-                print(f"\nQuestion: {check['question']['question']}")
-                print(f"Status: {check['analysis']['verification_status']}")
-                print(f"Confidence: {check['analysis']['confidence_score']}")
+                print(f"\nQuestion: {check.get('question', {}).get('question', 'Unknown')}")
+                if "analysis" in check:
+                    print(f"Status: {check['analysis'].get('verification_status', 'Unknown')}")
+                    print(f"Confidence: {check['analysis'].get('confidence_score', 0.0)}")
             
-            print("\nFollow-up Questions:")
-            for agent, questions in result["follow_up_questions"].items():
-                print(f"\n{agent.title()} Agent Questions:")
-                for q in questions:
-                    print(f"- {q}")
+            if result.get("follow_up_questions"):
+                print("\nFollow-up Questions:")
+                for agent, questions in result["follow_up_questions"].items():
+                    print(f"\n{agent.title()} Agent Questions:")
+                    for q in questions:
+                        print(f"- {q}")
             
-            print("\nRecommendations:")
-            for rec in result["recommendations"]:
-                print(f"- {rec}")
+            if result.get("recommendations"):
+                print("\nRecommendations:")
+                for rec in result["recommendations"]:
+                    print(f"- {rec}")
                 
             print("\nConfidence Scores:")
             for agent, score in result["metadata"]["confidence_scores"].items():
