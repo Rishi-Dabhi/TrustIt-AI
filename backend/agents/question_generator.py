@@ -24,21 +24,33 @@ class QuestionGeneratorAgent:
         try:
             model = genai.GenerativeModel('gemini-1.5-flash') 
             prompt = (
-                f"Based on the user query: '{initial_query}', generate {num_questions} specific, concise questions "
-                f"that would help gather comprehensive information about the topic through web searches. "
-                f"Focus on distinct aspects or facets of the original query. "
-                f"Return *only* the questions, each on a new line, without any numbering or bullet points."
+                f"First, critically evaluate the user query: '{initial_query}'.\n"
+                f"Determine if this query represents a statement or question that can be meaningfully investigated or fact-checked using publicly available information, such as recent news headlines or established knowledge. \n"
+                f"Consider if the query is: inherently subjective (opinion), purely personal ('Is my cat happy?'), unverifiable (metaphysical claims like 'Is God real?'), nonsensical, or simply too vague/lacking specifics to allow for factual analysis against external sources.\n"
+                f"If the query falls into any of these categories (subjective, personal, unverifiable, nonsensical, too vague for factual lookup), then you MUST return *only* the exact text: 'not enough context'.\n\n"
+                f"Otherwise (if the query *is* suitable for factual investigation via web search):\n"
+                f"Generate {num_questions} specific, concise questions based on '{initial_query}'. These questions should be designed to help gather comprehensive information and context about the topic through web searches, focusing on distinct aspects or facets.\n"
+                f"Return *only* the generated questions, each on a new line, without any numbering or bullet points."
             )
             
             response = model.generate_content(prompt)
             
             if response.text:
-                questions = [q.strip() for q in response.text.split('\n') if q.strip()]
-                print(f"Generated {len(questions)} questions:")
-                for i, q in enumerate(questions):
-                    print(f"  {i+1}. {q}")
-                print("-" * 30)
-                return questions
+
+                print("\n\n--- Gemini Response ---")
+                print(response.text)
+                print("-" * 30 + "\n\n")
+
+                if response.text.lower() == "not enough context":
+                    print("Gemini summarised that the user query is not enough context to generate questions.")
+                    return ["not enough context"]
+                else:
+                    questions = [q.strip() for q in response.text.split('\n') if q.strip()]
+                    print(f"Generated {len(questions)} questions:")
+                    for i, q in enumerate(questions):
+                        print(f"  {i+1}. {q}")
+                    print("-" * 30)
+                    return questions
             else:
                 print("Gemini did not return any questions.")
                 return [initial_query] # Fallback to the original query

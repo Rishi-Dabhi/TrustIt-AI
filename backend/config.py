@@ -7,9 +7,9 @@ def load_config():
     print("Loading environment variables...")
     
     config = {
-        "google_api_key": os.getenv("GOOGLE_API_KEY"),
-        "portia_api_key": os.getenv("PORTIA_API_KEY"),
-        "tavily_api_key": os.getenv("TAVILY_API_KEY")
+        "google_api_key": "AIzaSyCgsC41ic7GwUCs58C-FrkdIf6DA95grwk",
+        "portia_api_key": "prt-6TvKpajd.CN1XfJtmpxGTJhPftTj97kt86z7pAtkM",
+        "tavily_api_key": "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"
     }
     
     # Validate required keys
