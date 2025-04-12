@@ -110,4 +110,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-Load Backend --- uvicorn backend.server:app --reload --host 0.0.0.0 --port 8002
+To Load Backend --- uvicorn backend.server:app --reload --host 0.0.0.0 --port 8002
