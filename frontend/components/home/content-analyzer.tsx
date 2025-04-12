@@ -8,9 +8,8 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Upload, FileText } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
-import { useAuth } from "@/hooks/use-auth"
 import ImageUploader from "@/components/analyzers/image-uploader"
-import Link from 'next/link'
+import { processContent } from "@/lib/api"
 
 export default function ContentAnalyzer() {
   const [text, setText] = useState("")
@@ -18,33 +17,8 @@ export default function ContentAnalyzer() {
   const [activeTab, setActiveTab] = useState("text")
   const { toast } = useToast()
   const router = useRouter()
-  const { user } = useAuth()
 
   const handleAnalyzeText = async () => {
-    if (!user) {
-      return (
-        <section id="analyzer" className="py-16">
-          <h2 className="text-3xl font-bold text-center mb-8">Analyze Content</h2>
-          <Card className="max-w-3xl mx-auto text-center py-8">
-            <CardHeader>
-              <CardTitle>Authentication Required</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="mb-6">Please sign in to analyze content for misinformation.</p>
-              <div className="flex justify-center gap-4">
-                <Button asChild>
-                  <Link href="/login">Sign In</Link>
-                </Button>
-                <Button variant="outline" asChild>
-                  <Link href="/signup">Create Account</Link>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </section>
-      )
-    }
-    
     if (!text.trim()) {
       toast({
         title: "Empty content",
@@ -57,35 +31,24 @@ export default function ContentAnalyzer() {
     setIsAnalyzing(true)
 
     try {
-      // In a real implementation, this would call your backend API
-      // const response = await fetch('/api/analyze', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ content: text, type: 'text' })
-      // })
-      // const result = await response.json()
-
-      // Simulate API call with timeout
-      // await new Promise((resolve) => setTimeout(resolve, 1500))
-
-      // Navigate to results page with the analysis ID
-      // router.push(`/results/sample-analysis-id`)
-      const response = await fetch("https://your-fastapi-backend.com/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text, type: "text" }),
-      })
-
-      if (!response.ok) {
-        throw new Error("Analysis request failed")
+      const result = await processContent(text)
+      
+      if (result.error) {
+        throw new Error(result.error)
       }
 
-      const result = await response.json()
-      router.push(`/results/${result.analysisId}`)
+      // Store the analysis result in localStorage for the results page
+      localStorage.setItem('lastAnalysis', JSON.stringify(result))
+      
+      // Generate a simple ID based on timestamp
+      const analysisId = Date.now().toString()
+      
+      // Navigate to results page
+      router.push(`/results/${analysisId}`)
     } catch (error) {
       toast({
         title: "Analysis failed",
-        description: "There was an error analyzing your content. Please try again.",
+        description: error instanceof Error ? error.message : "There was an error analyzing your content. Please try again.",
         variant: "destructive",
       })
     } finally {

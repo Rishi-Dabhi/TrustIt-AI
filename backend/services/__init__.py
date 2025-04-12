@@ -1,3 +1,3 @@
-from .search_service import PortiaSearchService
+from .search_service import SearchService
 
-__all__ = ['PortiaSearchService'] 
+__all__ = ['SearchService'] 

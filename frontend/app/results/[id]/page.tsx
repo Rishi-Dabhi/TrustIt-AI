@@ -1,232 +1,209 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Progress } from "@/components/ui/progress"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useEffect, useState } from "react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { useAuth } from "@/hooks/use-auth"
-import { supabase } from "@/lib/supabase/client"
-import { BookmarkIcon, BookmarkFilledIcon } from "@radix-ui/react-icons"
-import { toggleSaveAnalysis } from "@/lib/supabase/database"
-import { useToast } from "@/components/ui/use-toast"
+import { useRouter } from "next/navigation"
+import { Loader2 } from "lucide-react"
+
+// Updated interface to match backend response
+interface FactCheckAnalysis {
+  verification_status: string;
+  confidence_score: number;
+  supporting_evidence: string[];
+  contradicting_evidence: string[];
+  reasoning: string;
+  evidence_gaps: string[];
+  recommendations: string[];
+  sources: string[];
+}
+
+interface FactCheck {
+  question: { question: string };
+  analysis: FactCheckAnalysis;
+}
+
+interface AnalysisResult {
+  initial_questions?: string[]; // Renamed from questions
+  fact_checks?: FactCheck[];   // Renamed from facts and typed
+  follow_up_questions?: string[]; // Added, though currently unused
+  recommendations?: string[];   // Added, though currently unused
+  metadata?: any;              // Added, though currently unused
+  judgment?: string;           // Added: overall judgment from JudgeAgent
+  judgment_reason?: string;    // Added: reasoning behind the judgment
+  error?: string;
+}
 
 export default function ResultsPage({ params }: { params: { id: string } }) {
-  const [analysisResult, setAnalysisResult] = useState<any>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [isSaved, setIsSaved] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const { user, loading } = useAuth()
+  const [result, setResult] = useState<AnalysisResult | null>(null)
+  const [loading, setLoading] = useState(true)
   const router = useRouter()
-  const { toast } = useToast()
 
   useEffect(() => {
-    if (!loading && !user) {
-      router.push("/login")
-      return
-    }
-
-    const fetchAnalysisResult = async () => {
-      if (!user) return
-
+    // Retrieve the analysis result from localStorage
+    const savedAnalysis = localStorage.getItem('lastAnalysis')
+    if (savedAnalysis) {
       try {
-        const { data, error } = await supabase.from("analyses").select("*").eq("id", params.id).single()
-
-        if (error) throw error
-
-        // Check if this analysis belongs to the current user
-        if (data.user_id !== user.id) {
-          toast({
-            title: "Access denied",
-            description: "You don't have permission to view this analysis",
-            variant: "destructive",
-          })
-          router.push("/dashboard")
-          return
-        }
-
-        setAnalysisResult(data)
-        setIsSaved(data.saved)
-      } catch (error) {
-        console.error("Error fetching analysis result:", error)
-        toast({
-          title: "Error",
-          description: "Failed to load analysis result",
-          variant: "destructive",
-        })
-      } finally {
-        setIsLoading(false)
+        const parsedResult = JSON.parse(savedAnalysis);
+        console.log("Parsed result from localStorage:", parsedResult); // Debug log
+        setResult(parsedResult);
+      } catch (e) {
+        console.error("Error parsing saved analysis:", e);
+        // Handle potential parsing error (e.g., invalid JSON)
+        setResult({ error: "Failed to load saved analysis results." })
       }
     }
+    setLoading(false)
+  }, [])
 
-    if (user) {
-      fetchAnalysisResult()
+  if (loading) {
+    return (
+      <div className="container mx-auto px-4 py-8 flex justify-center items-center min-h-[60vh]">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    )
+  }
+
+  if (!result) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <Alert variant="destructive">
+          <AlertTitle>Analysis Not Found</AlertTitle>
+          <AlertDescription>
+            We couldn't find the analysis results. Please try analyzing your content again.
+          </AlertDescription>
+        </Alert>
+        <Button onClick={() => router.push('/')} className="mt-4">
+          Back to Analyzer
+        </Button>
+      </div>
+    )
+  }
+
+  // Helper function to get the appropriate color for the judgment
+  const getJudgmentColor = (judgment: string) => {
+    switch(judgment?.toLowerCase()) {
+      case 'real':
+        return 'bg-green-100 text-green-800 border-green-200';
+      case 'fake':
+        return 'bg-red-100 text-red-800 border-red-200';
+      case 'uncertain':
+      default:
+        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
     }
-  }, [params.id, user, loading, router, toast])
-
-  const handleToggleSave = async () => {
-    if (!user || !analysisResult) return
-
-    setIsSaving(true)
-
-    try {
-      await toggleSaveAnalysis(analysisResult.id, !isSaved)
-      setIsSaved(!isSaved)
-      toast({
-        title: isSaved ? "Removed from saved" : "Saved successfully",
-        description: isSaved ? "Analysis removed from your saved items" : "Analysis added to your saved items",
-      })
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to update saved status",
-        variant: "destructive",
-      })
-    } finally {
-      setIsSaving(false)
-    }
   }
 
-  if (loading || !user) {
-    return (
-      <div className="container mx-auto py-8 flex items-center justify-center min-h-[calc(100vh-4rem)]">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600"></div>
-      </div>
-    )
+  // Get the confidence score for judgment from metadata if available
+  const getJudgmentConfidence = () => {
+    return result?.metadata?.confidence_scores?.judge 
+      ? `${(result.metadata.confidence_scores.judge * 100).toFixed(0)}%`
+      : 'N/A';
   }
-
-  if (isLoading) {
-    return (
-      <div className="container mx-auto py-8">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-3xl font-bold mb-8">Analysis Results</h1>
-          <div className="flex flex-col items-center justify-center py-12">
-            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-600 mb-4"></div>
-            <p className="text-gray-600">Loading analysis results...</p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (!analysisResult) {
-    return (
-      <div className="container mx-auto py-8">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-3xl font-bold mb-8">Analysis Results</h1>
-          <Card>
-            <CardContent className="py-12 text-center">
-              <p className="text-gray-600">Analysis result not found or has been deleted.</p>
-              <Button className="mt-4" onClick={() => router.push("/")}>
-                Analyse New Content
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    )
-  }
-
-  const getRiskLevel = (score: number) => {
-    if (score >= 80) return { level: "High Risk", color: "bg-red-500" }
-    if (score >= 50) return { level: "Medium Risk", color: "bg-yellow-500" }
-    return { level: "Low Risk", color: "bg-green-500" }
-  }
-
-  const risk = getRiskLevel(analysisResult.result.overallScore)
 
   return (
-    <div className="container mx-auto py-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold">Analysis Results</h1>
-          <Button variant="outline" size="icon" onClick={handleToggleSave} disabled={isSaving}>
-            {isSaved ? <BookmarkFilledIcon className="h-5 w-5 text-blue-600" /> : <BookmarkIcon className="h-5 w-5" />}
-            <span className="sr-only">{isSaved ? "Unsave" : "Save"}</span>
-          </Button>
-        </div>
-
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Content Analysed</CardTitle>
-            <CardDescription>The text that was submitted for analysis</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="p-4 bg-gray-50 rounded-md">
-              <p className="text-gray-800">{analysisResult.content}</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>Overall Assessment</CardTitle>
-            <CardDescription>Summary of the misinformation analysis</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center mb-4">
-              <div className="mr-4">
-                <div
-                  className={`w-16 h-16 rounded-full flex items-center justify-center ${risk.color} text-white font-bold text-xl`}
-                >
-                  {analysisResult.result.overallScore}%
-                </div>
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold">{risk.level} of Misinformation</h3>
-                <p className="text-gray-600">
-                  This content has been identified as potentially misleading based on our analysis.
-                </p>
-              </div>
-            </div>
-            <Progress value={analysisResult.result.overallScore} className="h-2" />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Detailed Analysis</CardTitle>
-            <CardDescription>Breakdown of the analysis by different AI agents</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Tabs defaultValue="linguistic">
-              <TabsList className="grid grid-cols-4 mb-6">
-                <TabsTrigger value="linguistic">Linguistic</TabsTrigger>
-                <TabsTrigger value="factChecking">Fact Checking</TabsTrigger>
-                <TabsTrigger value="sentiment">Sentiment</TabsTrigger>
-                <TabsTrigger value="sources">Sources</TabsTrigger>
-              </TabsList>
-
-              {Object.entries(analysisResult.result.agents).map(([key, agent]: [string, any]) => (
-                <TabsContent key={key} value={key}>
-                  <div className="space-y-4">
-                    <div className="flex items-center">
-                      <div
-                        className={`w-10 h-10 rounded-full flex items-center justify-center ${getRiskLevel(agent.score).color} text-white font-bold mr-3`}
-                      >
-                        {agent.score}%
+    <div className="container mx-auto px-4 py-8">
+      <Card>
+        <CardHeader>
+          <CardTitle>Analysis Results</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {result.error ? (
+            <Alert variant="destructive">
+              <AlertTitle>Analysis Failed</AlertTitle>
+              <AlertDescription>{result.error}</AlertDescription>
+            </Alert>
+          ) : (
+            <>
+              {/* Final Judgment Section */}
+              {result.judgment && (
+                <div className="mb-8">
+                  <div className={`p-4 rounded-lg border ${getJudgmentColor(result.judgment)}`}>
+                    <h2 className="text-xl font-bold mb-2">Final Judgment</h2>
+                    <div className="flex items-center justify-between">
+                      <p className="text-3xl font-extrabold">
+                        {result.judgment.toUpperCase()}
+                      </p>
+                      <div className="text-right">
+                        <p className="text-sm">Confidence</p>
+                        <p className="text-xl font-bold">{getJudgmentConfidence()}</p>
                       </div>
-                      <h3 className="text-lg font-semibold">{getRiskLevel(agent.score).level}</h3>
                     </div>
-
-                    <Progress value={agent.score} className="h-2 mb-4" />
-
-                    <h4 className="font-medium">Key Findings:</h4>
-                    <ul className="list-disc pl-5 space-y-1">
-                      {agent.findings.map((finding: string, index: number) => (
-                        <li key={index} className="text-gray-700">
-                          {finding}
-                        </li>
-                      ))}
-                    </ul>
+                    {result.judgment_reason && (
+                      <div className="mt-4 pt-3 border-t border-gray-200">
+                        <p className="text-sm font-medium">Reasoning:</p>
+                        <p className="text-sm">{result.judgment_reason}</p>
+                      </div>
+                    )}
                   </div>
-                </TabsContent>
-              ))}
-            </Tabs>
-          </CardContent>
-        </Card>
-      </div>
+                </div>
+              )}
+
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold mb-2">Initial Questions Generated</h3>
+                {result.initial_questions && result.initial_questions.length > 0 ? (
+                  <ul className="list-disc pl-6 space-y-2">
+                    {result.initial_questions.map((question, index) => (
+                      <li key={index}>{question}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-gray-500">No initial questions were generated.</p>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold mb-2">Fact Checking Results</h3>
+                {result.fact_checks && result.fact_checks.length > 0 ? (
+                  <div className="space-y-4">
+                    {result.fact_checks.map((factCheck, index) => (
+                      <div key={index} className="border p-4 rounded-lg bg-gray-50/50">
+                        <p className="font-medium mb-3"><span className="font-semibold">Q:</span> {factCheck.question?.question || "Question not available"}</p>
+                        
+                        <p className="mb-1"><span className="font-semibold">Status:</span> {factCheck.analysis?.verification_status || "N/A"} (Confidence: {factCheck.analysis?.confidence_score?.toFixed(2) ?? "N/A"})</p>
+                        
+                        {factCheck.analysis?.reasoning && (
+                           <p className="text-sm text-gray-700 my-2"><span className="font-semibold">Reasoning:</span> {factCheck.analysis.reasoning}</p>
+                        )}
+
+                        {factCheck.analysis?.supporting_evidence && factCheck.analysis.supporting_evidence.length > 0 && (
+                          <div className="mt-2"><p className="text-sm font-semibold">Supporting Evidence:</p>
+                            <ul className="list-disc pl-6 text-sm text-green-700">{factCheck.analysis.supporting_evidence.map((ev, i) => <li key={`sup-${i}`}>{ev}</li>)}</ul>
+                          </div>
+                        )}
+
+                        {factCheck.analysis?.contradicting_evidence && factCheck.analysis.contradicting_evidence.length > 0 && (
+                          <div className="mt-2"><p className="text-sm font-semibold">Contradicting Evidence:</p>
+                            <ul className="list-disc pl-6 text-sm text-red-700">{factCheck.analysis.contradicting_evidence.map((ev, i) => <li key={`con-${i}`}>{ev}</li>)}</ul>
+                          </div>
+                        )}
+
+                        {factCheck.analysis?.evidence_gaps && factCheck.analysis.evidence_gaps.length > 0 && (
+                          <div className="mt-2"><p className="text-sm font-semibold">Evidence Gaps:</p>
+                            <ul className="list-disc pl-6 text-sm text-yellow-700">{factCheck.analysis.evidence_gaps.map((ev, i) => <li key={`gap-${i}`}>{ev}</li>)}</ul>
+                          </div>
+                        )}
+
+                        {factCheck.analysis?.sources && factCheck.analysis.sources.length > 0 && (
+                          <div className="mt-3"><p className="text-sm font-semibold">Sources Used:</p>
+                            <ul className="list-disc pl-6 text-sm text-blue-600">{factCheck.analysis.sources.map((source, i) => <li key={`src-${i}`}>{source.startsWith('http') ? <a href={source} target="_blank" rel="noopener noreferrer" className="hover:underline">{source}</a> : source}</li>)}</ul>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">No fact checks were performed or results are available.</p>
+                )}
+              </div>
+            </>
+          )}
+          
+          <Button onClick={() => router.push('/')} className="mt-6">
+            Analyze Another Text
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   )
 }

@@ -26,18 +26,21 @@ This application integrates Portia's agent capabilities with Tavily's search API
 ### Installation
 
 1. Clone the repository
+
    ```
    git clone https://github.com/yourusername/TrustIt-AI.git
    cd TrustIt-AI
    ```
 
 2. Set up a virtual environment
+
    ```
    python -m venv portia-env-py311
-   source portia-env-py311/bin/activate  # On Windows: portia-env-py311\Scripts\activate
+   Run venv ---- source portia-env-py311/bin/activate  # On Windows: portia-env-py311\Scripts\activate
    ```
 
 3. Install dependencies
+
    ```
    pip install portia-ai python-dotenv google-generativeai requests pydantic
    ```
@@ -66,6 +69,7 @@ python -m backend.cli "your search query here"
 ```
 
 For example:
+
 ```
 python -m backend.cli "who is the current UK prime minister"
 ```
@@ -109,3 +113,40 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## TrustIt-AI Integration with Portia
+
+TrustIt-AI now integrates with [Portia](https://github.com/portiaAI/portia-sdk-python), an AI orchestration platform that provides:
+
+1. **Multi-agent planning** - Guides LLMs to produce structured plans for complex fact-checking
+2. **Stateful workflows** - Tracks progress through the fact-checking pipeline
+3. **Authenticated tool calling** - Seamlessly integrates with search and other tools
+
+The integration allows for a more robust fact-checking pipeline with better visibility into the LLM's reasoning process.
+
+### Using Portia Integration
+
+By default, the system now uses Portia for fact-checking. To switch between the original pipeline and Portia, modify the `use_portia` flag in `main.py`:
+
+```python
+# Choose which processing method to use
+use_portia = True  # Set to False to use the original pipeline
+```
+
+### Required API Keys
+
+To use the Portia integration, ensure you have the following API keys in your `.env` file:
+
+```
+GOOGLE_API_KEY=your_google_api_key
+PORTIA_API_KEY=your_portia_api_key  # If using Portia cloud services
+TAVILY_API_KEY=your_tavily_api_key  # For internet search
+```
+
+## Running the Backend Server
+
+To start the backend server, run:
+
+```
+uvicorn backend.server:app --reload --host 0.0.0.0 --port 8002
+```
