@@ -70,6 +70,9 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   
+  // Add a request cache ref to prevent duplicate API calls
+  const requestCacheRef = useRef<{[key: string]: Promise<any>}>({})
+  
   const router = useRouter()
 
   // Toggle expanded state for a specific section
@@ -130,68 +133,93 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
   // This function processes the original query or follow-up questions
   const processUserQuery = async (query: string, queryId: string) => {
     try {
+      // If we're already processing this exact query, return the existing promise
+      const cacheKey = `${query}:${queryId}`;
+      if (cacheKey in requestCacheRef.current) {
+        console.log(`Using cached request for ${cacheKey}`);
+        return await requestCacheRef.current[cacheKey];
+      }
+      
       setLoading(true);
       setProcessingQueryId(queryId);
       
-      const result = await processContent(query);
-      
-      if (result.error) {
-        throw new Error(result.error);
-      }
+      // Create a promise for the processing and store it in the cache
+      const processPromise = processContent(query).then(result => {
+        if (result.error) {
+          throw new Error(result.error);
+        }
 
-      // Store the analysis result in localStorage (only for the initial query)
-      if (queryId === "initial-query") {
-        localStorage.setItem('lastAnalysis', JSON.stringify(result));
-      }
-      
-      // Update state with new results
-      setResult(result);
-      
-      // Update the conversation with the new response
-      setConversation(prev => {
-        // Find if we already have a response for this query
-        const existingResponseIndex = prev.findIndex(msg => msg.id === `response-${queryId}`);
-        
-        if (existingResponseIndex !== -1) {
-          // Replace the existing response
-          const updatedConversation = [...prev];
-          updatedConversation[existingResponseIndex] = { 
-            id: `response-${queryId}`, 
-            type: 'response', 
-            content: result 
-          };
-          return updatedConversation;
-        } else {
-          // Add a new response
-          return [...prev, { id: `response-${queryId}`, type: 'response', content: result }];
+        // Store the analysis result in localStorage (only for the initial query)
+        if (queryId === "initial-query") {
+          localStorage.setItem('lastAnalysis', JSON.stringify(result));
         }
+        
+        // Update state with new results
+        setResult(result);
+        
+        // Update the conversation with the new response
+        setConversation(prev => {
+          // Find if we already have a response for this query
+          const existingResponseIndex = prev.findIndex(msg => msg.id === `response-${queryId}`);
+          
+          if (existingResponseIndex !== -1) {
+            // Replace the existing response
+            const updatedConversation = [...prev];
+            updatedConversation[existingResponseIndex] = { 
+              id: `response-${queryId}`, 
+              type: 'response', 
+              content: result 
+            };
+            return updatedConversation;
+          } else {
+            // Add a new response
+            return [...prev, { id: `response-${queryId}`, type: 'response', content: result }];
+          }
+        });
+        
+        return result;
+      }).catch(error => {
+        const errorMessage = error instanceof Error ? error.message : "There was an error analysing your content.";
+        const errorResult = { error: errorMessage, initial_questions: [], fact_checks: [] };
+        
+        // Update the conversation with the error
+        setConversation(prev => {
+          // Find if we already have a response for this query
+          const existingResponseIndex = prev.findIndex(msg => msg.id === `response-${queryId}`);
+          
+          if (existingResponseIndex !== -1) {
+            // Replace the existing response
+            const updatedConversation = [...prev];
+            updatedConversation[existingResponseIndex] = { 
+              id: `response-${queryId}`, 
+              type: 'response', 
+              content: errorResult 
+            };
+            return updatedConversation;
+          } else {
+            // Add a new response
+            return [...prev, { id: `response-${queryId}`, type: 'response', content: errorResult }];
+          }
+        });
+        
+        throw error;
+      }).finally(() => {
+        setLoading(false);
+        setProcessingQueryId(null);
+        // Remove this request from the cache after it's complete
+        delete requestCacheRef.current[cacheKey];
       });
+      
+      // Store the promise in the cache
+      requestCacheRef.current[cacheKey] = processPromise;
+      
+      // Await the promise and return its result
+      return await processPromise;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "There was an error analysing your content.";
-      setResult({ error: errorMessage });
-      
-      // Update the conversation with the error
-      setConversation(prev => {
-        // Find if we already have a response for this query
-        const existingResponseIndex = prev.findIndex(msg => msg.id === `response-${queryId}`);
-        
-        if (existingResponseIndex !== -1) {
-          // Replace the existing response
-          const updatedConversation = [...prev];
-          updatedConversation[existingResponseIndex] = { 
-            id: `response-${queryId}`, 
-            type: 'response', 
-            content: { error: errorMessage } 
-          };
-          return updatedConversation;
-        } else {
-          // Add a new response
-          return [...prev, { id: `response-${queryId}`, type: 'response', content: { error: errorMessage } }];
-        }
-      });
-    } finally {
+      console.error("Error in processUserQuery:", error);
       setLoading(false);
       setProcessingQueryId(null);
+      throw error;
     }
   };
 
