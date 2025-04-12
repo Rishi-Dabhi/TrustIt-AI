@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Upload, FileText } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import ImageUploader from "@/components/analyzers/image-uploader"
-import { processContent } from "@/lib/api"
+// Note: We'll still use processContent in the results page, not here
 
 export default function ContentAnalyzer() {
   const [text, setText] = useState("")
@@ -31,27 +31,23 @@ export default function ContentAnalyzer() {
     setIsAnalyzing(true)
 
     try {
-      const result = await processContent(text)
+      // Store the query in localStorage for the results page
+      localStorage.setItem('lastQuery', text)
       
-      if (result.error) {
-        throw new Error(result.error)
-      }
-
-      // Store the analysis result in localStorage for the results page
-      localStorage.setItem('lastAnalysis', JSON.stringify(result))
+      // Clear any previous analysis results
+      localStorage.removeItem('lastAnalysis')
       
       // Generate a simple ID based on timestamp
       const analysisId = Date.now().toString()
       
-      // Navigate to results page
+      // Navigate to results page immediately
       router.push(`/results/${analysisId}`)
     } catch (error) {
       toast({
-        title: "Analysis failed",
-        description: error instanceof Error ? error.message : "There was an error analyzing your content. Please try again.",
+        title: "Navigation failed",
+        description: error instanceof Error ? error.message : "There was an error navigating to the results page. Please try again.",
         variant: "destructive",
       })
-    } finally {
       setIsAnalyzing(false)
     }
   }
@@ -97,7 +93,7 @@ export default function ContentAnalyzer() {
               disabled={isAnalyzing || !text.trim()}
               className="w-full"
             >
-              {isAnalyzing ? "Analysing..." : "Analyse"}
+              {isAnalyzing ? "Redirecting..." : "Analyse"}
             </Button>
           </CardFooter>
         )}

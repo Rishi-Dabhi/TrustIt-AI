@@ -36,10 +36,12 @@ This application integrates Portia's agent capabilities with Tavily's search API
 
    ```
    python -m venv portia-env-py311
-   ```
-   Run venv ---- 
-   Linux: `source portia-env-py311/bin/activate`
-   Windows: `portia-env-py311\Scripts\activate`
+   
+   # Activate the virtual environment:
+   # On Linux/Mac:
+   source portia-env-py311/bin/activate
+   # On Windows:
+   portia-env-py311\Scripts\activate
 
 4. Install dependencies
 
