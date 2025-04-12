@@ -36,3 +36,18 @@ node getPage.js https://www.theguardian.com/us-news/2025/apr/11/trump-tariffs-ch
 ```
 
 
+or 
+
+```
+node listen.mjs
+```
+and in a different window (envvar not required in this window)
+
+```
+node getOnePage.js $SOME_NEWSPAGE_URL 
+
+```
+```
+node getOnePage.js https://www.theguardian.com/us-news/2025/apr/11/trump-tariffs-china-recession 
+
+```
