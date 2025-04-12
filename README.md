@@ -36,16 +36,18 @@ This application integrates Portia's agent capabilities with Tavily's search API
 
    ```
    python -m venv portia-env-py311
-   Run venv ---- source portia-env-py311/bin/activate  # On Windows: portia-env-py311\Scripts\activate
    ```
+   Run venv ---- 
+   Linux: `source portia-env-py311/bin/activate`
+   Windows: `portia-env-py311\Scripts\activate`
 
-3. Install dependencies
+4. Install dependencies
 
    ```
    pip install portia-ai python-dotenv google-generativeai requests pydantic
    ```
 
-4. Create a `.env` file in the project root with the following API keys:
+5. Create a `.env` file in the project root with the following API keys:
    ```
    GOOGLE_API_KEY=your_google_api_key
    PORTIA_API_KEY=your_portia_api_key
