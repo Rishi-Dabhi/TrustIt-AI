@@ -179,6 +179,44 @@ class PortiaFactChecker:
         # Create Portia instance configured only for question generation planning
         self.portia_planner = Portia(config=portia_config, tools=tools)
     
+    def _clean_verification_status(self, status):
+        """Remove prefix from verification status and normalize the value."""
+        if not status:
+            return "UNCERTAIN"
+        
+        # Remove "Verification Status: " prefix if present
+        if "Verification Status:" in status:
+            status = status.split("Verification Status:", 1)[1].strip()
+        
+        # Normalize values to expected formats
+        status_mapping = {
+            "verified": "VERIFIED",
+            "true": "VERIFIED",
+            "correct": "VERIFIED",
+            "accurate": "VERIFIED",
+            "confirmed": "VERIFIED",
+            "real": "VERIFIED",
+            
+            "partially true": "PARTIALLY TRUE",
+            "partially false": "PARTIALLY TRUE",
+            
+            "false": "FALSE",
+            "incorrect": "FALSE",
+            "untrue": "FALSE",
+            "misleading": "MISLEADING",
+            "fake": "FALSE",
+            
+            "unsubstantiated": "UNCERTAIN",
+            "uncertain": "UNCERTAIN",
+            "unknown": "UNCERTAIN",
+            "unable to verify": "UNCERTAIN",
+            "insufficient evidence": "UNCERTAIN",
+            "unclear": "UNCERTAIN",
+            "ambiguous": "UNCERTAIN"
+        }
+        
+        return status_mapping.get(status.lower(), status.upper())
+    
     async def process_content(self, content: str) -> Dict[str, Any]:
         """Process content through fact-checking pipeline: QGen (Portia Plan) -> FactCheck (Manual Loop) -> Judge (Manual Call)"""
         import logging
@@ -267,11 +305,16 @@ class PortiaFactChecker:
                  if isinstance(output, dict) and 'fact_checks' in output and output['fact_checks']:
                      analysis_data = output['fact_checks'][0].get('analysis', {})
                  
+                 # Get clean verification status without prefix
+                 raw_status = analysis_data.get("verification_status", "UNCERTAIN")
+                 clean_status = self._clean_verification_status(raw_status)
+                 
                  # Basic formatting, adjust based on actual FactCheckingAgent output structure
                  formatted_check = {
                      "question": {"question": q},
                      "analysis": {
-                         "verification_status": analysis_data.get("verification_status", "UNCERTAIN"),
+                         "verification_status": clean_status,
+                         "raw_verification_status": raw_status,  # Keep original for debugging
                          "confidence_score": analysis_data.get("confidence_score", 0.5),
                          "sources": analysis_data.get("sources", []),
                          "supporting_evidence": analysis_data.get("supporting_evidence", []),

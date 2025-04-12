@@ -27,7 +27,11 @@ class JudgeAgent:
             "verified", "true", "correct", "accurate", "confirmed", "real"
         }
         self.false_statuses = {
-            "false", "incorrect", "untrue", "misleading", "fake", "partially true", "partially false"
+            "false", "incorrect", "untrue", "misleading", "fake"
+        }
+        # Create separate category for partially true/false statuses
+        self.partially_true_statuses = {
+            "partially true", "partially false"
         }
         self.uncertain_statuses = {
             "unknown", "uncertain", "unable to verify", "insufficient evidence", 
@@ -176,12 +180,14 @@ class JudgeAgent:
         return avg_confidence
 
     def _normalize_status(self, status: str) -> str:
-        """Normalize various status strings to canonical values: 'verified', 'false', 'uncertain'."""
+        """Normalize various status strings to canonical values: 'verified', 'false', 'partially_true', 'uncertain'."""
         status_lower = status.lower().strip().replace("verification status:", "").strip()
         if status_lower in self.verified_statuses:
             return "verified"
         elif status_lower in self.false_statuses:
             return "false"
+        elif status_lower in self.partially_true_statuses:
+            return "partially_true"
         elif status_lower in self.uncertain_statuses:
             return "uncertain"
         else:
@@ -212,11 +218,13 @@ class JudgeAgent:
         # Initialize counters and scores
         verified_count = 0
         false_count = 0
+        partially_true_count = 0
         uncertain_count = 0
         total_confidence = 0.0
         total_checks = len(fact_checks)
         highest_false_confidence = 0.0 # Track confidence of FAKE claims
         highest_verified_confidence = 0.0 # Track confidence of REAL claims
+        highest_partially_true_confidence = 0.0 # Track confidence of MISLEADING claims
         reasons = []
 
         self.logger.info(f"Judging based on {total_checks} fact check analyses.")
@@ -240,6 +248,10 @@ class JudgeAgent:
                     false_count += 1
                     highest_false_confidence = max(highest_false_confidence, confidence)
                     reasons.append(f"Claim {i+1} deemed false/misleading (Confidence: {confidence:.2f}). {reason_snippet}")
+                elif normalized_status == "partially_true":
+                    partially_true_count += 1
+                    highest_partially_true_confidence = max(highest_partially_true_confidence, confidence)
+                    reasons.append(f"Claim {i+1} deemed partially true (Confidence: {confidence:.2f}). {reason_snippet}")
                 else: # uncertain
                     uncertain_count += 1
                     reasons.append(f"Claim {i+1} uncertain (Confidence: {confidence:.2f}). {reason_snippet}")
@@ -260,31 +272,34 @@ class JudgeAgent:
         # Determine final judgment based on counts and confidence
         judgment = "UNCERTAIN"
         
-        # Priority 1: If any claim is confidently false/misleading, judgment is FAKE or MISLEADING
+        # Priority 1: If any claim is confidently false, judgment is FAKE
         if false_count > 0 and highest_false_confidence >= 0.7:
              judgment = "FAKE"
              # Use the highest confidence of the FAKE claims as the overall confidence
              final_confidence = max(0.5, min(1.0, highest_false_confidence))
-        elif false_count > 0: # If there are false claims but not high confidence
+        # Priority 2: If there are partially true claims or mix of true/false, judgment is MISLEADING
+        elif partially_true_count > 0 or (false_count > 0 and verified_count > 0):
             judgment = "MISLEADING"
-            # Confidence reflects average, but capped lower due to misleading nature
-            final_confidence = max(0.5, min(0.8, final_confidence)) 
-            
-        # Priority 2: If most claims are verified with high confidence
+            # For MISLEADING, use the highest confidence of partially true claims
+            if partially_true_count > 0:
+                final_confidence = max(0.5, min(0.9, highest_partially_true_confidence))
+            else:
+                # Or average confidence if mixed true/false
+                final_confidence = max(0.5, min(0.8, final_confidence))
+        # Priority 3: If most claims are verified with high confidence
         elif verified_count / total_checks >= 0.6 and average_confidence >= self.real_threshold:
              judgment = "REAL"
              # Confidence reflects average, potentially boosted by strong verification
              final_confidence = max(0.5, min(1.0, average_confidence))
              final_confidence = max(final_confidence, highest_verified_confidence) # Ensure it's at least the highest verified
-             
-        # Priority 3: If mostly uncertain or mixed low-confidence results
+        # Priority 4: If mostly uncertain or mixed low-confidence results
         else:
             judgment = "UNCERTAIN"
             # Confidence reflects the average, likely lower
             final_confidence = max(0.5, min(0.7, final_confidence)) 
 
         # Compile the final reasoning string
-        summary_reason = f"Judgment based on {total_checks} claims: {verified_count} verified, {false_count} false/misleading, {uncertain_count} uncertain. Average Confidence: {average_confidence:.2f}. "
+        summary_reason = f"Judgment based on {total_checks} claims: {verified_count} verified, {false_count} false, {partially_true_count} partially true, {uncertain_count} uncertain. Average Confidence: {average_confidence:.2f}. "
         summary_reason += " || ".join(reasons)
 
         self.logger.info(f"Final Judgment: {judgment}, Final Confidence: {final_confidence:.2f}")
