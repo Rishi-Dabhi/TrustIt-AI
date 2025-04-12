@@ -7,6 +7,7 @@ import os
 from typing import Dict, Any, List
 from pydantic import BaseModel, Field
 import re
+import yaml
 
 from portia import (
     Config,
@@ -160,6 +161,16 @@ class PortiaFactChecker:
             google_api_key=self.config["google_api_key"]
         )
         
+        # Load portia_agent personality
+        try:
+            personality_path = "backend/config/personalities/portia_agent.yaml"
+            with open(personality_path, "r") as f:
+                self.personality = yaml.safe_load(f)
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to load portia_agent personality: {e}")
+            self.personality = None
+        
         # Only include Question Generator tool for Portia planning phase
         tools = [
             QuestionGeneratorTool(self.config) 
@@ -177,12 +188,18 @@ class PortiaFactChecker:
             # === Step 1: Generate Questions using Portia Planner ===
             logging.info("Step 1: Generating questions using Portia Planner...")
             # Prompt focused only on question generation or "not enough context"
-            question_prompt = f"""
+            base_prompt = """
             Critically evaluate the following content: '{content}'
             Determine if it contains factual claims suitable for investigation or if it's subjective, unverifiable, nonsensical, or too vague.
             If unsuitable for fact-checking, return ONLY the exact text: 'not enough context'.
             Otherwise, generate 3 specific, concise questions targeting the main factual claims. Return ONLY the questions, each on a new line.
             """
+            
+            # Add personality system prompt if available
+            if self.personality and "system_prompt" in self.personality:
+                question_prompt = f"{self.personality['system_prompt']}\n\n{base_prompt.format(content=content)}"
+            else:
+                question_prompt = base_prompt.format(content=content)
             
             # Generate and run the plan for question generation
             plan = self.portia_planner.plan(query=question_prompt)
