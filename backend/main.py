@@ -1,13 +1,103 @@
 """
-Main entry point for the Portia search application.
-Initializes the environment, loads configuration, and runs the search service.
+Main entry point for the TrustIt-AI application.
+Initializes the environment, loads configuration, and runs the fact-checking system.
 """
 
-from backend.utils import setup_environment
-from backend.config import load_config
-from backend.services import PortiaSearchService
+import asyncio
+import traceback
+from typing import Dict, Any, List
 
-def main():
+# Use relative imports
+from .agents import (
+    FactCheckingAgent,
+    QuestionGeneratorAgent,
+)
+from .services.search_service import SearchService
+from .config import load_config # Assuming config.py is in the same directory
+from .utils import setup_environment # Assuming utils is a subdirectory
+
+async def process_content(content: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    """Process content through the agent pipeline"""
+    try:
+        print("\nInitializing agents...")
+        # Initialize services
+        search_service = SearchService(config)
+        
+        # Initialize agents
+        fact_checker = FactCheckingAgent(config)
+        question_generator = QuestionGeneratorAgent(config)
+        
+        print("\nGenerating initial questions...")
+        # Generate initial questions
+        # The generate_questions method is synchronous and returns a list of strings.
+        initial_questions_list = question_generator.generate_questions(initial_query=content)
+        questions_result = {
+            "questions": initial_questions_list,
+            # Placeholder for metadata and confidence score if needed later
+            "metadata": {"timestamp": "2024-03-20T12:00:00Z"}, 
+            "confidence_score": 0.0 # Placeholder
+        }
+
+        # questions_list is currently a list of strings.
+        # The FactCheckingAgent likely expects a list of dicts, e.g., [{'question': '...'}]
+        questions_for_fact_checker = [{"question": q} for q in initial_questions_list]
+
+        if "error" in questions_result:
+            print(f"Error in fact questioning: {questions_result['error']}")
+            return {"error": f"Fact questioning failed: {questions_result['error']}"}
+
+        print("\nVerifying facts...")
+        # Verify facts
+        fact_checks = await fact_checker.process({
+            "questions": questions_for_fact_checker, # Pass the formatted list
+            "content": content,
+            "metadata": questions_result["metadata"]
+        })
+
+        if "error" in fact_checks:
+            print(f"Error in fact checking: {fact_checks['error']}")
+            return {"error": f"Fact checking failed: {fact_checks['error']}"}
+
+        # Temporarily comment out follow-up question generation as QuestionGeneratorAgent
+        # doesn't support generating questions based on fact checks.
+        # print("\\nGenerating follow-up questions...")
+        # # Review and generate follow-up questions
+        # review_result = await question_generator.process({ # Use question_generator
+        #     "fact_checks": fact_checks["fact_checks"],
+        #     "content": content,
+        #     "metadata": fact_checks["metadata"]
+        # })
+        #
+        # if "error" in review_result:
+        #     print(f"Error in questioning: {review_result['error']}")
+        #     return {"error": f"Questioning failed: {review_result['error']}"}
+
+        # TODO: Implement follow-up question generation using an appropriate agent.
+        follow_up_questions_placeholder = [] # Placeholder
+        recommendations_placeholder = [] # Placeholder
+        follow_up_confidence_placeholder = 0.0 # Placeholder
+
+        return {
+            "initial_questions": questions_result["questions"],
+            "fact_checks": fact_checks["fact_checks"],
+            "follow_up_questions": follow_up_questions_placeholder, # Use placeholder
+            "recommendations": recommendations_placeholder, # Use placeholder
+            "metadata": {
+                "confidence_scores": {
+                    "question_generator": questions_result.get("confidence_score", 0.0),
+                    "fact_checking": fact_checks.get("confidence_score", 0.0),
+                    # "question_generator": review_result.get("confidence_score", 0.0) # Commented out
+                    "follow_up_generator": follow_up_confidence_placeholder # Placeholder
+                }
+            }
+        }
+        
+    except Exception as e:
+        print(f"\nError in processing pipeline: {str(e)}")
+        traceback.print_exc()
+        return {"error": str(e)}
+
+async def main():
     """Main function to run the application"""
     # Setup environment and configuration
     setup_environment()
@@ -16,29 +106,56 @@ def main():
         # Load configuration
         config = load_config()
         
-        # Initialize search service
-        search_service = PortiaSearchService(config)
+        # Test content
+        test_content = """
+        Recent studies suggest that artificial intelligence could replace up to 40% of jobs 
+        by 2030. This has led to widespread concern about unemployment and economic disruption. 
+        However, historical evidence shows that technological advances typically create more 
+        jobs than they eliminate.
+        """
         
-        # Run a test search
-        search_query = "who is uk prime minister?"
-        final_answer = search_service.search(search_query)
+        # Process the content
+        result = await process_content(test_content, config)
         
         # Display results
-        print("\n" + "="*40)
-        print("      FINAL ANSWER FROM PORTIA SEARCH      ")
-        print("="*40)
-        print(final_answer)
-        print("="*40)
-        
+        if "error" not in result:
+            print("\n" + "="*50)
+            print("      FACT-CHECKING ANALYSIS RESULTS      ")
+            print("="*50)
+            print("\nInitial Questions:")
+            for q in result["initial_questions"]:
+                print(f"- {q}")
+            
+            print("\nFact Checks:")
+            for check in result["fact_checks"]:
+                print(f"\nQuestion: {check['question']['question']}")
+                print(f"Status: {check['analysis']['verification_status']}")
+                print(f"Confidence: {check['analysis']['confidence_score']}")
+            
+            print("\nFollow-up Questions:")
+            for agent, questions in result["follow_up_questions"].items():
+                print(f"\n{agent.title()} Agent Questions:")
+                for q in questions:
+                    print(f"- {q}")
+            
+            print("\nRecommendations:")
+            for rec in result["recommendations"]:
+                print(f"- {rec}")
+                
+            print("\nConfidence Scores:")
+            for agent, score in result["metadata"]["confidence_scores"].items():
+                print(f"{agent}: {score}")
+            print("="*50)
+        else:
+            print(f"\nError: {result['error']}")
+            
     except Exception as e:
         print(f"\nApplication error: {e}")
-        print("\n--- Portia initialization failed ---")
+        print("\n--- TrustIt-AI initialization failed ---")
         print("Please ensure you have:")
-        print("1. Installed the Portia package correctly")
-        print("2. Set up valid API keys in the .env file:")
-        print("   - PORTIA_API_KEY for Portia")
-        print("   - TAVILY_API_KEY for Tavily search")
-        print("   - GOOGLE_API_KEY for Gemini LLM")
+        print("1. Set up all required API keys in the .env file")
+        print("2. Installed all required dependencies")
+        print("3. Configured the environment correctly")
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main()) 

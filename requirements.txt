@@ -1,0 +1,6 @@
+google-generativeai>=0.3.0
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
+pyyaml>=6.0.1
+portia-sdk  # Replace with actual version if needed
+tavily-sdk  # Replace with actual version if needed 

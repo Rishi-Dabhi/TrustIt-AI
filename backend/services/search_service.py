@@ -1,157 +1,128 @@
 import traceback
 import google.generativeai as genai
 
-from portia import Portia, Config, StorageClass, LogLevel, LLMProvider
-from backend.tools import TavilySearchTool
-from backend.agents import QuestionGeneratorAgent
+# Use relative imports since we'll run from the project root
+from ..tools import TavilySearchTool
+from ..agents import QuestionGeneratorAgent
 
-class PortiaSearchService:
-    """Service to handle Portia initialization and search functionality"""
+class SearchService:
+    """Service to handle search functionality using Google's Generative AI and Tavily"""
     
     def __init__(self, config):
         self.config = config
-        self.portia_instance = None
         self.question_agent = QuestionGeneratorAgent(config)
-        self._initialize_portia()
+        self._initialize_genai()
+        self.search_tool = None
     
-    def _initialize_portia(self):
-        """Initialize Portia with the search tool"""
+    def _initialize_genai(self):
+        """Initialize Google's Generative AI and Tavily tool"""
         try:
             if "google_api_key" in self.config:
                 genai.configure(api_key=self.config["google_api_key"])
+                print("Google Generative AI configured successfully!")
             else:
-                raise ValueError("Google API Key is required for Portia setup.")
-            
-            print("Configuring Portia...")
-            portia_config = Config.from_default(
-                storage_class=StorageClass.CLOUD,
-                default_log_level=LogLevel.INFO,
-                llm_provider=LLMProvider.GOOGLE_GENERATIVE_AI,
-                llm_model_name="GEMINI_1_5_FLASH",
-                api_key=self.config["portia_api_key"]
-            )
-            
-            # Create the Tavily search tool
-            search_tool = TavilySearchTool(api_key=self.config["tavily_api_key"])
-            print(f"Created custom Tavily search tool: {search_tool.id}")
-            
-            # Initialize Portia with the tools
-            self.portia_instance = Portia(config=portia_config, tools=[search_tool])
-            
-            print("-" * 30)
-            print(f"Portia initialized successfully!")
-            print(f"Using LLM Provider: {self.portia_instance.config.llm_provider}")
-            try:
-                resolved_default_model = self.portia_instance.config.model("default_model_name")
-                print(f"Resolved Default Model: {resolved_default_model.name} ({resolved_default_model.api_name})")
-            except Exception as e:
-                print(f"Could not resolve default model details: {e}")
-            print("-" * 30)
-            
+                raise ValueError("Google API Key is required for setup.")
+
+            # Create the Tavily search tool directly
+            if "tavily_api_key" in self.config:
+                self.search_tool = TavilySearchTool(api_key=self.config["tavily_api_key"])
+                print(f"Created Tavily search tool successfully!")
+            else:
+                 raise ValueError("Tavily API Key is required for setup.")
+
         except Exception as e:
-            print(f"Error setting up Portia with search tool: {e}")
+            print(f"Error during initialization: {e}")
             traceback.print_exc()
-            self.portia_instance = None
+            self.search_tool = None
     
     def search(self, query: str) -> str:
         """
-        Generate sub-questions, search the web for each using Portia, 
-        and aggregate the results.
+        Generate sub-questions, search the web for each using Tavily,
+        and aggregate the results using Google's Generative AI.
         """
-        if not self.portia_instance:
-            return "Error: Portia instance is not available."
-        
-        # 1. Generate sub-questions
-        sub_questions = self.question_agent.generate_questions(query)
-        
-        all_results = []
-        print(f"\n--- Searching for {len(sub_questions)} Sub-Questions ---")
-        
-        # 2. Loop through sub-questions and search
-        for i, sub_q in enumerate(sub_questions):
-            print(f"\n[{i+1}/{len(sub_questions)}] Searching for: '{sub_q}'")
-            print("-" * 20)
-            try:
-                # Use Portia to run the search for the sub-question
-                # We tell Portia to use the tool and focus on the specific sub-question
-                run_prompt = (
-                    f"Use the Tavily Search tool to find information specifically about: '{sub_q}'. "
-                    f"Provide a detailed answer based on the search results."
-                )
-                
-                plan_run = self.portia_instance.run(query=run_prompt)
-                
-                print(f"\n--- Portia Run Finished for '{sub_q}' --- State: {plan_run.state}")
-                result = self._extract_result(plan_run)
-                all_results.append(result)
-                print(f"Result for '{sub_q}':\n{result[:200]}...\n") # Print snippet
+        if not self.search_tool:
+            return "Error: Search service is not properly initialized."
 
-            except Exception as e:
-                error_message = f"Error during search for '{sub_q}': {e}"
-                print(error_message)
-                traceback.print_exc()
-                all_results.append(f"Search failed for question: {sub_q}")
-                
-        print("--- All Sub-Searches Completed ---")
-        
-        # 3. Aggregate and synthesize results (Optional: Use another Gemini call for synthesis)
-        # For now, just concatenate the results
-        final_aggregate = f"Combined results for the initial query: '{query}'\n\n"
-        final_aggregate += "\n\n---\n\n".join(all_results)
-        
-        # Optional: Add a synthesis step here using Gemini if needed
-        # synthesized_answer = self._synthesize_results(query, all_results)
-        # return synthesized_answer
-        
-        return final_aggregate
-    
-    def _extract_result(self, plan_run):
-        """Extract the final result from the Portia run object"""
-        if plan_run.state == "COMPLETE":
-            # Extract the final output from the nested structure
-            if hasattr(plan_run, 'outputs') and hasattr(plan_run.outputs, 'final_output'):
-                if hasattr(plan_run.outputs.final_output, 'value'):
-                    return plan_run.outputs.final_output.value
-                elif hasattr(plan_run.outputs.final_output, 'summary'):
-                    return plan_run.outputs.final_output.summary
-            
-            # Fallback to step outputs if final output not available
-            if hasattr(plan_run, 'outputs') and hasattr(plan_run.outputs, 'step_outputs'):
-                if plan_run.outputs.step_outputs:
-                    # Get the first step output's value
-                    first_key = next(iter(plan_run.outputs.step_outputs))
-                    step_output = plan_run.outputs.step_outputs[first_key]
-                    if hasattr(step_output, 'value'):
-                        return step_output.value
-            return "No final output found in completed run."
-        elif plan_run.state == "CLARIFICATION":
-            return f"Agent needs clarification: {plan_run.clarifications}"
-        else:
-            # Try to get step outputs even if not complete
-            if hasattr(plan_run, 'outputs') and hasattr(plan_run.outputs, 'step_outputs'):
-                if plan_run.outputs.step_outputs:
-                    first_key = next(iter(plan_run.outputs.step_outputs))
-                    step_output = plan_run.outputs.step_outputs[first_key]
-                    if hasattr(step_output, 'value'):
-                         return f"Run ended in state {plan_run.state}, but found step output: {step_output.value}"
-            return f"Search process ended in state: {plan_run.state}. No usable output found."
+        try:
+            # 1. Generate sub-questions
+            sub_questions = self.question_agent.generate_questions(query)
 
-    # Optional: Add a synthesis method if desired
-    # def _synthesize_results(self, original_query: str, results: list[str]) -> str:
-    #     """Use Gemini to synthesize the collected results into a final answer."""
-    #     print("\n--- Synthesizing Final Answer ---")
-    #     try:
-    #         model = genai.GenerativeModel('gemini-1.5-pro') # Use a more powerful model for synthesis
-    #         combined_results = "\n\n".join(results)
-    #         prompt = (
-    #             f"Based on the original query: '{original_query}' and the following search results collected for sub-questions:\n\n"
-    #             f"{combined_results}\n\n"
-    #             f"Please synthesize this information into a single, comprehensive, and well-structured answer to the original query. "
-    #             f"Avoid simply listing the results; integrate the information smoothly."
-    #         )
-    #         response = model.generate_content(prompt)
-    #         return response.text
-    #     except Exception as e:
-    #         print(f"Error during synthesis: {e}")
-    #         traceback.print_exc()
-    #         return "Synthesis failed. Returning combined raw results:\n\n" + "\n\n---\n\n".join(results) 
+            all_results = []
+            print(f"\n--- Searching for {len(sub_questions)} Sub-Questions ---")
+
+            # 2. Loop through sub-questions and search using Tavily
+            for i, sub_q in enumerate(sub_questions):
+                print(f"\n[{i+1}/{len(sub_questions)}] Searching for: '{sub_q}'")
+                print("-" * 20)
+
+                try:
+                    # Use Tavily tool directly
+                    search_result = self.search_tool.search(sub_q)
+                    all_results.append({
+                        'question': sub_q,
+                        'result': search_result
+                    })
+                    print(f"Found results for '{sub_q}'")
+
+                except Exception as e:
+                    error_message = f"Error during search for '{sub_q}': {e}"
+                    print(error_message)
+                    traceback.print_exc()
+                    all_results.append({
+                        'question': sub_q,
+                        'result': f"Search failed: {str(e)}"
+                    })
+
+            print("--- All Sub-Searches Completed ---")
+
+            # 3. Use Gemini to synthesize the results
+            return self._synthesize_results(query, all_results)
+
+        except Exception as e:
+            error_message = f"Error during main search process: {e}"
+            print(error_message)
+            traceback.print_exc()
+            return f"An error occurred: {error_message}"
+
+    def _synthesize_results(self, original_query: str, results: list[dict]) -> str:
+        """Use Gemini to synthesize the collected results into a final answer."""
+        print("\n--- Synthesizing Final Answer ---")
+        try:
+            # Ensure GenAI is configured (might be redundant if __init__ succeeded, but safe)
+            if not genai.API_KEY:
+                 return "Error: Google Generative AI is not configured for synthesis."
+
+            model = genai.GenerativeModel('gemini-1.5-pro') # Consider making model configurable
+
+            # Format the results for the prompt
+            formatted_results = "\n\n".join([
+                f"Sub-question: {r['question']}\nResults: {r['result']}"
+                for r in results
+            ])
+
+            prompt = (
+                f"Based on the original query: '{original_query}' and the following search results:\n\n"
+                f"{formatted_results}\n\n"
+                f"Please synthesize this information into a comprehensive and well-structured answer to the original query. "
+                f"Integrate the information smoothly and ensure it directly addresses the original query. If search for some sub-questions failed, mention that the information might be incomplete."
+            )
+
+            response = model.generate_content(prompt)
+            # Add basic check for response content
+            if response and response.text:
+                return response.text
+            else:
+                # Handle cases where the response might be empty or blocked
+                print(f"Synthesis generation failed or returned empty response. Response: {response}")
+                return "Synthesis failed to generate content. Raw results:\n\n" + formatted_results
+
+
+        except Exception as e:
+            print(f"Error during synthesis: {e}")
+            traceback.print_exc()
+            # Fallback to returning raw results if synthesis fails
+            formatted_results = "\n\n".join([
+                f"Question: {r['question']}\nResults: {r['result']}"
+                for r in results
+            ])
+            return "Synthesis failed due to an error. Raw results:\n\n" + formatted_results 

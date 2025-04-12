@@ -1,5 +1,6 @@
 import google.generativeai as genai
 import traceback
+from .personalities import AgentPersonalities
 
 class QuestionGeneratorAgent:
     """Agent that uses Gemini to generate sub-questions from an initial query."""
