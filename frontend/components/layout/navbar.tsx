@@ -48,7 +48,7 @@ export default function Navbar() {
                 key={item.name}
                 href={item.href}
                 className={`text-sm font-medium transition-colors ${
-                  isActive(item.href) ? "text-purple-500" : "text-gray-600 hover:text-blue-600"
+                  isActive(item.href) ? "text-purple-500" : "text-gray-600 hover:text-purple-600"
                 }`}
               >
                 {item.name}
