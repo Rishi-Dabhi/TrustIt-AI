@@ -8,7 +8,20 @@ const FLATTEN = false;
 let browser
 
 export async function launchBrowser(params) {
-  browser = await puppeteer.launch(params);
+  console.log('import.meta.url', import.meta.url);
+  console.log('process.argv[1]',process.argv[1]);
+  
+  
+  try {
+    browser = await puppeteer.launch(params);
+  } catch (err) {
+    if (err.message.includes('No usable sandbox')) {
+      console.log("You're missing a setup step. Check README.md and setup a sandbox, eg with \n export CHROME_DEVEL_SANDBOX=/opt/google/chrome/chrome-sandbox");
+      process.exit(1);      
+    }
+    else throw(err);
+  }
+  return browser;
 }
 
 export async function closeBrowser() {
@@ -18,8 +31,8 @@ export async function closeBrowser() {
   }
 }
 
-export async function extractArticle(url) {
-  const browser = await puppeteer.launch();
+export async function extractArticle(url, logOutput= true ) {
+  const browser = await launchBrowser();
   const page = await browser.newPage();
   try {
     await page.goto(url);
@@ -36,9 +49,10 @@ export async function extractArticle(url) {
         .replace(/<[^>]+>/g, '')            // Remove all other HTML tags
         .replace(/\n{3,}/g, '\n\n');        // Normalize excessive newlines
 
-
-    console.log('Headline:', article.title);
-    console.log('Content:', content);
+    if (logOutput) {
+      console.log('Headline:', article.title);
+      console.log('Content:', content);
+    }
     return article.textContent
   } finally {
       await page.close();
@@ -47,7 +61,12 @@ export async function extractArticle(url) {
 
 async function main() {
   const url = process.argv[2] || DEFAULT_URL;
-  await extractArticle(url);
+  try {
+    await extractArticle(url, false)
+    .then(()=> { console.log('Test article: success'); });
+  } catch (err) {
+    throw(err);
+  }
 }
 
 main().catch(console.error);
