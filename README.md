@@ -109,3 +109,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+uvicorn backend.server:app --reload --host 0.0.0.0 --port 8002

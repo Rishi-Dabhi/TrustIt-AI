@@ -5,6 +5,10 @@ from .base_agent import BaseAgent
 import asyncio
 # Import Tavily client
 from tavily import TavilyClient
+import re
+import traceback
+# Use relative imports
+from ..utils import tavily_limiter, gemini_limiter
 
 class FactCheckingAgent(BaseAgent):
     """Agent that verifies factual accuracy using external sources"""
@@ -30,61 +34,64 @@ class FactCheckingAgent(BaseAgent):
             print(f"--- [PROCESS] Received {len(questions)} questions to process ---")
 
             fact_checks = []
-            analysis_tasks = []
-            questions_processed = [] # Keep track of questions corresponding to tasks
 
-            print("--- [PROCESS] Starting loop to schedule analysis tasks ---")
-            for question_dict in questions: # Now iterate over dicts
-                print(f"--- [PROCESS] Scheduling analysis for question: {question_dict.get('question', 'N/A')[:30]}... ---")
+            print("--- [PROCESS] Starting sequential processing of questions ---")
+            for i, question_dict in enumerate(questions):
+                print(f"--- [PROCESS] Processing question {i+1}/{len(questions)}: {question_dict.get('question', 'N/A')[:30]}... ---")
                 try:
                     question_text = question_dict.get("question", "")
                     if not question_text:
                         print("--- [PROCESS] Skipping empty question dict ---")
                         continue
-                    # Schedule the analysis task, passing the full question dict
-                    analysis_tasks.append(self._analyze_evidence(question_dict, content))
-                    questions_processed.append(question_dict) # Store the original question dict
+                    
+                    # Process each question sequentially to respect rate limits
+                    try:
+                        analysis_result = await self._analyze_evidence(question_dict, content)
+                        fact_checks.append({
+                            "question": question_dict,
+                            "analysis": analysis_result
+                        })
+                        
+                        # Add a mandatory pause between questions to ensure rate limits are respected
+                        if i < len(questions) - 1:  # Don't wait after the last question
+                            wait_time = 5.0  # 5 second pause between questions
+                            print(f"--- [PROCESS] Waiting {wait_time}s before processing next question ---")
+                            await asyncio.sleep(wait_time)
+                            
+                    except Exception as e:
+                        print(f"--- [PROCESS] Error analyzing evidence: {str(e)} ---")
+                        fact_checks.append({
+                            "question": question_dict,
+                            "analysis": {
+                                "verification_status": "error",
+                                "confidence_score": 0.0,
+                                "error": f"Error during analysis: {str(e)}",
+                                "supporting_evidence": [],
+                                "contradicting_evidence": [],
+                                "reasoning": f"Analysis failed: {str(e)}",
+                                "evidence_gaps": [],
+                                "recommendations": [],
+                                "sources": []
+                            }
+                        })
                 except Exception as e:
                     # Handle immediate errors during task creation if any
-                    print(f"--- [PROCESS] EXCEPTION during task scheduling for {question_dict.get('question', 'N/A')}: {e} ---")
+                    print(f"--- [PROCESS] EXCEPTION during processing for {question_dict.get('question', 'N/A')}: {e} ---")
                     fact_checks.append({
                         "question": question_dict,
                         "analysis": {
                             "verification_status": "error",
                             "confidence_score": 0.0,
-                            "error": f"Error setting up analysis: {str(e)}"
+                            "error": f"Error setting up analysis: {str(e)}",
+                            "supporting_evidence": [],
+                            "contradicting_evidence": [],
+                            "reasoning": f"Failed to process: {str(e)}",
+                            "evidence_gaps": [],
+                            "recommendations": [],
+                            "sources": []
                         }
                     })
-            print("--- [PROCESS] Finished loop scheduling analysis tasks ---")
-
-            # Run all analysis tasks concurrently
-            if analysis_tasks:
-                print(f"--- [PROCESS] Starting gather for {len(analysis_tasks)} analysis tasks ---")
-                analysis_results = await asyncio.gather(*analysis_tasks, return_exceptions=True)
-                print(f"--- [PROCESS] Finished gather for analysis tasks ---")
-
-                # Process results
-                print(f"--- [PROCESS] Processing {len(analysis_results)} results ---")
-                for i, result in enumerate(analysis_results):
-                    original_question = questions_processed[i]
-                    if isinstance(result, Exception):
-                        print(f"--- [PROCESS] EXCEPTION result from gather for {original_question.get('question', 'N/A')}: {result} ---")
-                        fact_checks.append({
-                            "question": original_question,
-                            "analysis": {
-                                "verification_status": "error",
-                                "confidence_score": 0.0,
-                                "error": str(result)
-                            }
-                        })
-                    else:
-                        fact_checks.append({
-                            "question": original_question,
-                            "analysis": result # Result is now the structured analysis dict
-                        })
-                print(f"--- [PROCESS] Finished processing results ---")
-            else:
-                print("--- [PROCESS] No analysis tasks were scheduled or ran ---")
+            print("--- [PROCESS] Finished processing all questions ---")
 
             print("--- [PROCESS] Returning results ---")
             return {
@@ -103,12 +110,13 @@ class FactCheckingAgent(BaseAgent):
         """Search the web for evidence using Tavily API"""
         print(f"--- [TAVILY:{question_text[:20]}...] Entering _search_web ---")
         try:
-            # Tavily client search is synchronous, run in thread pool
+            # Tavily client search is synchronous, run in thread pool with rate limiting
             loop = asyncio.get_running_loop()
-            print(f"--- [TAVILY:{question_text[:20]}...] Calling run_in_executor ---")
+            print(f"--- [TAVILY:{question_text[:20]}...] Calling run_in_executor with rate limiting ---")
             response = await loop.run_in_executor(
                 None, # Default executor (ThreadPoolExecutor)
-                lambda: self.tavily_client.search(
+                lambda: tavily_limiter.execute_with_limit(
+                    self.tavily_client.search,
                     query=question_text,
                     search_depth="advanced", # Use advanced for more comprehensive results
                     max_results=5 # Limit results
@@ -160,29 +168,45 @@ class FactCheckingAgent(BaseAgent):
         question_text = question_dict.get("question", "Unknown question")
         print(f"--- [ANALYZE:{question_text[:20]}...] Entering _analyze_evidence ---")
         try:
-            # 1. Gather evidence concurrently
-            print(f"--- [ANALYZE:{question_text[:20]}...] Starting gather for search tasks ---")
-            web_search_task = self._search_web(question_text)
-            wiki_search_task = self._search_wikipedia(question_text)
-            web_results, wiki_results = await asyncio.gather(
-                web_search_task, wiki_search_task, return_exceptions=True
-            )
-            print(f"--- [ANALYZE:{question_text[:20]}...] Finished gather for search tasks ---")
+            # 1. Gather evidence sequentially to respect rate limits
+            print(f"--- [ANALYZE:{question_text[:20]}...] Starting sequential search tasks ---")
+            
+            # Execute web search first
+            print(f"--- [ANALYZE:{question_text[:20]}...] Starting web search ---")
+            try:
+                web_results = await self._search_web(question_text)
+                web_error = None
+            except Exception as e:
+                web_results = []
+                web_error = e
+                print(f"--- [ANALYZE:{question_text[:20]}...] Web search resulted in error: {e} ---")
+            
+            # Then execute Wikipedia search
+            print(f"--- [ANALYZE:{question_text[:20]}...] Starting Wikipedia search ---")
+            try:
+                wiki_results = await self._search_wikipedia(question_text)
+                wiki_error = None
+            except Exception as e:
+                wiki_results = []
+                wiki_error = e
+                print(f"--- [ANALYZE:{question_text[:20]}...] Wiki search resulted in error: {e} ---")
+            
+            print(f"--- [ANALYZE:{question_text[:20]}...] Finished sequential search tasks ---")
 
             # Handle potential errors from search tasks
             web_evidence_str = "No web results found or error during search."
             if isinstance(web_results, list):
                  web_evidence_str = "\n".join([f"- {r.get('content', 'N/A')} (Source: {r.get('url', 'N/A')})" for r in web_results])
-            elif isinstance(web_results, Exception):
-                 web_evidence_str = f"Error during web search: {web_results}"
-                 print(f"--- [ANALYZE:{question_text[:20]}...] Web search resulted in error: {web_results} ---")
+            elif web_error:
+                 web_evidence_str = f"Error during web search: {web_error}"
+                 print(f"--- [ANALYZE:{question_text[:20]}...] Web search resulted in error: {web_error} ---")
 
             wiki_evidence_str = "No Wikipedia results found or error during search."
             if isinstance(wiki_results, list) and wiki_results:
                  wiki_evidence_str = "\n".join([f"- {r.get('title', 'N/A')}: {r.get('snippet', 'N/A')}" for r in wiki_results])
-            elif isinstance(wiki_results, Exception):
-                 wiki_evidence_str = f"Error during Wikipedia search: {wiki_results}"
-                 print(f"--- [ANALYZE:{question_text[:20]}...] Wiki search resulted in error: {wiki_results} ---")
+            elif wiki_error:
+                 wiki_evidence_str = f"Error during Wikipedia search: {wiki_error}"
+                 print(f"--- [ANALYZE:{question_text[:20]}...] Wiki search resulted in error: {wiki_error} ---")
 
             # Create a summary from the evidence for easier analysis
             evidence_summary = "Evidence Summary:\n"
@@ -261,8 +285,20 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
                  raise ValueError("Generative model not available for analysis.")
 
             print(f"--- [ANALYZE:{question_text[:20]}...] Calling LLM.generate_content ---")
-            response = self.model.generate_content(prompt)
-            print(f"--- [ANALYZE:{question_text[:20]}...] LLM.generate_content returned ---")
+            try:
+                # Use gemini_limiter to handle rate limiting and retries
+                loop = asyncio.get_running_loop()
+                response = await loop.run_in_executor(
+                    None,  # Default executor
+                    lambda: gemini_limiter.execute_with_limit(
+                        self.model.generate_content,
+                        prompt
+                    )
+                )
+                print(f"--- [ANALYZE:{question_text[:20]}...] LLM.generate_content returned ---")
+            except Exception as e:
+                print(f"--- [ANALYZE:{question_text[:20]}...] Error calling LLM: {str(e)} ---")
+                raise ValueError(f"Failed to get LLM response: {str(e)}")
 
             # 4. Parse the response
             print(f"--- [ANALYZE:{question_text[:20]}...] Parsing LLM response ---")

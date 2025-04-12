@@ -4,6 +4,7 @@ import google.generativeai as genai
 # Use relative imports since we'll run from the project root
 from ..tools import TavilySearchTool
 from ..agents import QuestionGeneratorAgent
+from ..utils import tavily_limiter, gemini_limiter
 
 class SearchService:
     """Service to handle search functionality using Google's Generative AI and Tavily"""
@@ -56,8 +57,8 @@ class SearchService:
                 print("-" * 20)
 
                 try:
-                    # Use Tavily tool directly
-                    search_result = self.search_tool.search(sub_q)
+                    # Use Tavily tool with rate limiting
+                    search_result = self.search_tool.run(search_query=sub_q)
                     all_results.append({
                         'question': sub_q,
                         'result': search_result
@@ -107,7 +108,12 @@ class SearchService:
                 f"Integrate the information smoothly and ensure it directly addresses the original query. If search for some sub-questions failed, mention that the information might be incomplete."
             )
 
-            response = model.generate_content(prompt)
+            # Use the gemini_limiter to prevent rate limiting
+            response = gemini_limiter.execute_with_limit(
+                model.generate_content,
+                prompt
+            )
+            
             # Add basic check for response content
             if response and response.text:
                 return response.text
