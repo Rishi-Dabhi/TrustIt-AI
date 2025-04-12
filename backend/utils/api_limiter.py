@@ -22,7 +22,7 @@ class APILimiter:
     def __init__(
         self, 
         name: str = "gemini",
-        base_delay: float = 5.0,  # Base delay in seconds between API calls
+        base_delay: float = 1.0,  # Base delay in seconds between API calls
         max_retries: int = 3,  # Maximum number of retries for a failed call
         max_backoff: float = 60.0,  # Maximum backoff time in seconds
         daily_quota: Optional[int] = None  # Daily quota limit if known

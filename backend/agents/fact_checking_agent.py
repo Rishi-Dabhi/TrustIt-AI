@@ -71,7 +71,8 @@ class FactCheckingAgent(BaseAgent):
                                 "reasoning": f"Analysis failed: {str(e)}",
                                 "evidence_gaps": [],
                                 "recommendations": [],
-                                "sources": []
+                                "sources": [],
+                                "source_evaluations": []
                             }
                         })
                 except Exception as e:
@@ -88,7 +89,8 @@ class FactCheckingAgent(BaseAgent):
                             "reasoning": f"Failed to process: {str(e)}",
                             "evidence_gaps": [],
                             "recommendations": [],
-                            "sources": []
+                            "sources": [],
+                            "source_evaluations": []
                         }
                     })
             print("--- [PROCESS] Finished processing all questions ---")
@@ -253,10 +255,9 @@ INSTRUCTIONS FOR ANALYSIS:
 1. First, identify the specific factual assertions in the claim that need verification.
 2. Carefully evaluate each piece of evidence for its relevance, credibility, and relationship to the claim.
 3. Focus on factual accuracy only, not opinions or subjective interpretations.
-4. Weigh contradicting evidence fairly, noting if some sources are more authoritative than others.
-5. Provide explicit reasoning that connects the evidence to your conclusion.
-6. Be precise about what parts of a claim can and cannot be verified with the available evidence.
-7. Use neutral language and avoid inferring information not supported by the evidence.
+4. For EACH source, determine if it SUPPORTS (YES) or CONTRADICTS (NO) the claim.
+5. Be precise about what parts of a claim can and cannot be verified with the available evidence.
+6. Use neutral language and avoid inferring information not supported by the evidence.
 
 ===== FORMAT YOUR ANALYSIS EXACTLY AS FOLLOWS =====
 
@@ -268,12 +269,18 @@ INSTRUCTIONS FOR ANALYSIS:
    - "Unsubstantiated" - Claim makes assertions that cannot be supported by the available evidence
    - "Unable to Verify" - Insufficient or unclear evidence to make a determination
 
-2. Confidence Score: Provide a score from 0.0 to 1.0 indicating your confidence in this verification status.
-   - 0.9-1.0: Overwhelming evidence from multiple credible sources
-   - 0.7-0.8: Strong evidence, minor uncertainties
-   - 0.5-0.6: Moderate evidence, significant uncertainties
-   - 0.3-0.4: Limited evidence, major uncertainties
-   - 0.0-0.2: Very little evidence or highly conflicting evidence
+2. Source Evaluation:
+   - For each source that provides relevant information, list the source and whether it SUPPORTS (YES) or CONTRADICTS (NO) the claim.
+   - IMPORTANT: YES means the source supports the claim as stated. NO means the source contradicts the claim.
+   - For "evidence-seeking" questions (like "What evidence exists for X?"):
+     - YES means the source provides evidence that X exists
+     - NO means the source indicates no evidence for X exists
+   - For example, if the claim is "Donald Trump was involved in 9/11" and a source shows he wasn't:
+     - You would mark that as NO because the source contradicts the claim
+   - Format: Source URL or name: YES/NO - Brief justification
+   - Example: 
+     - example.com/article: YES - Directly confirms the statistics cited in the claim
+     - Wikipedia: NO - Contains contradicting information about the timeline
 
 3. Supporting Evidence: List specific facts from the search results that directly support the claim.
    - Include only direct evidence that confirms specific aspects of the claim
@@ -326,7 +333,7 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
             # 4. Parse the response
             print(f"--- [ANALYZE:{question_text[:20]}...] Parsing LLM response ---")
             if response.text:
-                parsed_analysis = self._parse_analysis(response.text)
+                parsed_analysis = self._parse_analysis(response.text, question_text)
                 # Log the verification status to help with debugging
                 status = parsed_analysis.get("verification_status", "Unknown")
                 print(f"--- [ANALYZE:{question_text[:20]}...] Verification Status: {status} ---")
@@ -348,6 +355,14 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
                         parsed_analysis["confidence_score"] = 0.5  # Default to 0.5 if conversion fails
                 
                 parsed_analysis["sources"] = list(set(sources)) # Unique sources
+                
+                # Print source evaluations and confidence score for debugging
+                source_evaluations = parsed_analysis.get("source_evaluations", [])
+                if source_evaluations:
+                    print(f"--- [ANALYZE:{question_text[:20]}...] Source Evaluations:")
+                    for eval in source_evaluations:
+                        print(f"  - {eval['source']}: {eval['verdict']} - {eval['reason'][:50]}...")
+                
                 print(f"--- [ANALYZE:{question_text[:20]}...] Finished analysis with confidence score: {parsed_analysis.get('confidence_score')} ---")
                 return parsed_analysis
             else:
@@ -357,7 +372,7 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
                      "verification_status": "Unable to Verify", "confidence_score": 0.5,  # Use float for confidence_score
                      "supporting_evidence": [], "contradicting_evidence": [],
                      "reasoning": "Failed to get analysis from LLM", "evidence_gaps": [],
-                     "recommendations": [], "sources": []
+                     "recommendations": [], "sources": [], "source_evaluations": []
                  }
 
         except Exception as e:
@@ -367,7 +382,7 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
                  "verification_status": "Error", "confidence_score": 0.0,
                  "supporting_evidence": [], "contradicting_evidence": [],
                  "reasoning": f"Error during analysis: {str(e)}", "evidence_gaps": [],
-                 "recommendations": [], "sources": []
+                 "recommendations": [], "sources": [], "source_evaluations": []
             }
     
     def _process_search_results(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -390,7 +405,7 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
             print(f"Error processing Wikipedia results: {e}")
         return results
     
-    def _parse_analysis(self, text: str) -> Dict[str, Any]:
+    def _parse_analysis(self, text: str, question_text: str = "") -> Dict[str, Any]:
         """Parse the model's analysis response with improved accuracy for verification status and reasoning"""
         analysis = {
             "verification_status": "Unknown",
@@ -400,7 +415,8 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
             "reasoning": "",
             "evidence_gaps": [],
             "recommendations": [],
-            "sources": [] # Sources will be added in _analyze_evidence
+            "sources": [], # Sources will be added in _analyze_evidence
+            "source_evaluations": []  # Track individual source evaluations
         }
         current_section = None
         buffer = []
@@ -444,14 +460,91 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
             if not matched:
                 analysis["verification_status"] = raw_status.capitalize()
         
-        # Extract confidence score using regex
-        confidence_pattern = re.search(r'(?:2\.|[Cc]onfidence\s*[Ss]core:?)\s*(\d+(?:\.\d+)?)', text)
-        if confidence_pattern:
-            try:
-                score = float(confidence_pattern.group(1))
-                analysis["confidence_score"] = min(max(score, 0.0), 1.0)  # Ensure in range [0, 1]
-            except ValueError:
-                pass  # Keep default 0.0 if parsing fails
+        # Extract source evaluations and count YES/NO responses
+        source_eval_section = re.search(r'(?:2\.|[Ss]ource\s*[Ee]valuation:?)(.*?)(?:3\.|[Ss]upporting\s*[Ee]vidence:?)', text, re.DOTALL)
+        yes_count = 0
+        no_count = 0
+        
+        if source_eval_section:
+            source_lines = source_eval_section.group(1).strip().split('\n')
+            for line in source_lines:
+                line = line.strip()
+                if not line or line.startswith('-') and len(line) < 3:  # Skip empty lines or just bullet points
+                    continue
+                    
+                # Extract source evaluations using regex
+                source_match = re.search(r'[-•*]?\s*(.*?):\s*(YES|NO|yes|no|Yes|No)\s*-\s*(.*)', line)
+                if source_match:
+                    source = source_match.group(1).strip()
+                    verdict = source_match.group(2).upper()
+                    reason = source_match.group(3).strip()
+                    
+                    analysis["source_evaluations"].append({
+                        "source": source,
+                        "verdict": verdict,
+                        "reason": reason
+                    })
+                    
+                    if verdict == "YES":
+                        yes_count += 1
+                    elif verdict == "NO":
+                        no_count += 1
+        
+        # Calculate confidence score based on proportion of YES/NO responses
+        total_sources = yes_count + no_count
+        if total_sources > 0:
+            # Handle confidence calculation based on verification status AND question context
+            status = analysis["verification_status"].lower()
+            
+            # Get the question text to analyze context
+            question_context = question_text if 'question_text' in locals() else ""
+            
+            # For "False" claims, NO responses contribute to confidence
+            if "false" in status:
+                analysis["confidence_score"] = no_count / total_sources
+            # For "Unsubstantiated" claims, the interpretation depends on the question context
+            elif "unsubstantiated" in status or "unable to verify" in status:
+                # Check if the question is asking about "evidence exists" or "origins"
+                evidence_patterns = [
+                    r'what evidence',
+                    r'is there evidence', 
+                    r'is there any evidence',
+                    r'evidence.*exists',
+                    r'evidence.*support',
+                    r'origins of',
+                    r'source of',
+                    r'where.*come from'
+                ]
+                
+                # If question asks about evidence existence, and sources say NO (no evidence),
+                # then this SUPPORTS the "Unsubstantiated" verdict with high confidence
+                is_evidence_question = any(re.search(pattern, question_context.lower()) for pattern in evidence_patterns)
+                
+                if is_evidence_question:
+                    # For evidence questions, NO answers actually support the "Unsubstantiated" verdict
+                    analysis["confidence_score"] = no_count / total_sources
+                    print(f"--- [PARSE] Evidence-seeking question detected. NO answers support 'Unsubstantiated' verdict.")
+                else:
+                    # Default behavior for other types of unsubstantiated claims
+                    analysis["confidence_score"] = 0.5  # Neutral confidence for unclear cases
+            else:
+                # For "Verified" and other positive claims, YES responses contribute to confidence
+                analysis["confidence_score"] = yes_count / total_sources
+        else:
+            # If no sources were evaluated, use a default based on verification status
+            status = analysis["verification_status"].lower()
+            if "verified" in status:
+                analysis["confidence_score"] = 0.85
+            elif "false" in status:
+                analysis["confidence_score"] = 0.85  # High confidence for false claims too
+            elif "partially true" in status:
+                analysis["confidence_score"] = 0.5
+            elif "misleading" in status:
+                analysis["confidence_score"] = 0.3
+            elif "unsubstantiated" in status:
+                analysis["confidence_score"] = 0.2
+            else:  # Unable to verify
+                analysis["confidence_score"] = 0.5
         
         # Now process the text line by line to extract the full sections
         lines = text.split("\n")
@@ -467,8 +560,8 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
             # Improved section detection with precise patterns
             if re.search(r'^(?:1\.|[Vv]erification\s*[Ss]tatus)', lower_line):
                 new_section = "verification_status"
-            elif re.search(r'^(?:2\.|[Cc]onfidence\s*[Ss]core)', lower_line):
-                new_section = "confidence_score"
+            elif re.search(r'^(?:2\.|[Ss]ource\s*[Ee]valuation)', lower_line):
+                new_section = "source_evaluation"
             elif re.search(r'^(?:3\.|[Ss]upporting\s*[Ee]vidence)', lower_line):
                 new_section = "supporting_evidence"
             elif re.search(r'^(?:4\.|[Cc]ontradicting\s*[Ee]vidence)', lower_line):
@@ -513,7 +606,7 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
                             items.append(item_buffer)
                             
                         analysis[current_section] = items
-                    else:  # For verification_status, confidence_score, reasoning
+                    elif current_section != "source_evaluation":  # Skip source_evaluation as we've already processed it
                         analysis[current_section] = section_content
                 
                 # Reset buffer for new section, first line may contain the section header 
@@ -531,7 +624,7 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
                     buffer.append(line_strip)
 
         # Process the buffer for the last section
-        if current_section and buffer:
+        if current_section and buffer and current_section != "source_evaluation":
             section_content = "\n".join(filter(None, buffer)).strip()
             if current_section in ["supporting_evidence", "contradicting_evidence", "evidence_gaps", "recommendations"]:
                 # Process list items
@@ -561,7 +654,7 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
                     items.append(item_buffer)
                     
                 analysis[current_section] = items
-            else:  # For verification_status, confidence_score, reasoning
+            else:  # For verification_status, reasoning
                 analysis[current_section] = section_content
 
         # Make sure reasoning is not empty
@@ -575,49 +668,37 @@ Answer ONLY with the structured analysis exactly as outlined above, with numbere
                 status = analysis["verification_status"]
                 analysis["reasoning"] = f"Based on the evidence, the claim is determined to be {status}."
 
-        # Calculate confidence score based on verification status if not already set
-        if analysis["confidence_score"] == 0.0 or analysis["confidence_score"] == 0.5:
-            status = analysis["verification_status"].lower()
-            if "verified" in status:
-                analysis["confidence_score"] = 0.85
-            elif "false" in status:
-                analysis["confidence_score"] = 0.85
-            elif "partially true" in status:
-                analysis["confidence_score"] = 0.7
-            elif "misleading" in status:
-                analysis["confidence_score"] = 0.7
-            elif "unsubstantiated" in status:
-                analysis["confidence_score"] = 0.6
-            else:  # Unable to verify
-                analysis["confidence_score"] = 0.5
-                
         # Ensure confidence_score is a float
         try:
             analysis["confidence_score"] = float(analysis["confidence_score"])
         except (ValueError, TypeError):
             analysis["confidence_score"] = 0.5
-
-        # Ensure supporting_evidence and contradicting_evidence are not empty
-        if not analysis["supporting_evidence"]:
-            # Try to extract supporting evidence from the text if the section wasn't properly identified
-            evidence_match = re.search(r'(?:3\.|[Ss]upporting\s*[Ee]vidence:?)\s*(.*?)(?:(?:4\.|[Cc]ontradicting)|$)', text, re.DOTALL)
-            if evidence_match:
-                raw_evidence = evidence_match.group(1).strip()
-                # Split by bullet points or new lines
-                items = re.split(r'[\n\r]+|(?:[-•*]|\d+[\.)])', raw_evidence)
-                analysis["supporting_evidence"] = [item.strip() for item in items if item.strip()]
-                
-        if not analysis["contradicting_evidence"]:
-            # Try to extract contradicting evidence from the text if the section wasn't properly identified
-            evidence_match = re.search(r'(?:4\.|[Cc]ontradicting\s*[Ee]vidence:?)\s*(.*?)(?:(?:5\.|[Rr]easoning)|$)', text, re.DOTALL)
-            if evidence_match:
-                raw_evidence = evidence_match.group(1).strip()
-                # Split by bullet points or new lines
-                items = re.split(r'[\n\r]+|(?:[-•*]|\d+[\.)])', raw_evidence)
-                analysis["contradicting_evidence"] = [item.strip() for item in items if item.strip()]
-
-        # Print the final parsed analysis for debugging
-        print(f"--- [PARSE] Final verification_status: {analysis['verification_status']}")
-        print(f"--- [PARSE] Final confidence_score: {analysis['confidence_score']}")
+            
+        # Debug log the source evaluations
+        print(f"--- [PARSE] Found {yes_count} YES and {no_count} NO evaluations from sources")
+        print(f"--- [PARSE] Verification status: {analysis['verification_status']}")
         
+        # Enhanced debugging for different question types
+        status = analysis["verification_status"].lower()
+        if "false" in status:
+            print(f"--- [PARSE] For FALSE claims, NO answers increase confidence: {analysis['confidence_score']:.2f}")
+        elif "unsubstantiated" in status or "unable to verify" in status:
+            # Check if we detected an evidence-seeking question
+            evidence_patterns = [
+                r'what evidence', r'is there evidence', r'is there any evidence',
+                r'evidence.*exists', r'evidence.*support', r'origins of',
+                r'source of', r'where.*come from'
+            ]
+            is_evidence_question = any(re.search(pattern, question_text.lower()) for pattern in evidence_patterns)
+            
+            if is_evidence_question:
+                print(f"--- [PARSE] Evidence-seeking question detected: '{question_text[:50]}...'")
+                print(f"--- [PARSE] For UNSUBSTANTIATED claims with evidence questions, NO answers increase confidence: {analysis['confidence_score']:.2f}")
+            else:
+                print(f"--- [PARSE] For UNSUBSTANTIATED claims (non-evidence questions), confidence is neutral: {analysis['confidence_score']:.2f}")
+        else:
+            print(f"--- [PARSE] For non-FALSE claims, YES answers increase confidence: {analysis['confidence_score']:.2f}")
+            
+        print(f"--- [PARSE] Final confidence score: {analysis['confidence_score']}")
+
         return analysis 

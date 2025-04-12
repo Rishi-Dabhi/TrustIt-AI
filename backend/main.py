@@ -33,6 +33,25 @@ async def process_content(content: str, config: Dict[str, Any]) -> Dict[str, Any
         # Generate initial questions
         # The generate_questions method is synchronous and returns a list of strings.
         initial_questions_list = question_generator.generate_questions(initial_query=content)
+
+        if "not enough context" in initial_questions_list:
+            return {
+                "initial_questions": ["Not enough context to generate questions."], 
+                "fact_checks": [],
+                "follow_up_questions": [],
+                "recommendations": [],
+                "judgment": "Not enough context",
+                "judgment_reason": "Not enough context to generate questions.",
+                "metadata": {
+                    "confidence_scores": {
+                        "question_generator": 0.5,
+                        "fact_checking": 0.5,
+                        "follow_up_generator": 0.5,
+                        "judge": 0.5
+                    }
+                }
+            }
+
         questions_result = {
             "questions": initial_questions_list,
             # Placeholder for metadata and confidence score if needed later
