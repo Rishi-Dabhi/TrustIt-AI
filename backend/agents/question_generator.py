@@ -1,6 +1,7 @@
 import google.generativeai as genai
 import traceback
 from .personalities import AgentPersonalities
+import re
 
 class QuestionGeneratorAgent:
     """Agent that uses Gemini to generate sub-questions from an initial query."""
@@ -22,14 +23,18 @@ class QuestionGeneratorAgent:
         """Generate a list of specific questions based on the initial query."""
         print(f"\n--- Generating Sub-Questions for: '{initial_query}' ---")
         try:
-            model = genai.GenerativeModel('gemini-2.0-flash') 
+            model = genai.GenerativeModel('gemini-1.5-flash') 
             prompt = (
-                f"First, critically evaluate the user query: '{initial_query}'.\n"
-                f"Determine if this query represents a statement or question that can be meaningfully investigated or fact-checked using publicly available information, such as recent news headlines or established knowledge. \n"
-                f"Consider if the query is: inherently subjective (opinion), purely personal ('Is my cat happy?'), unverifiable (metaphysical claims like 'Is God real?'), nonsensical, or simply too vague/lacking specifics to allow for factual analysis against external sources.\n"
-                f"Otherwise (if the query *is* suitable for factual investigation via web search):\n"
-                f"Generate {num_questions} specific, concise questions based on '{initial_query}'. These questions should be designed to help gather comprehensive information and context about the topic through web searches, focusing on distinct aspects or facets.\n"
-                f"Return *only* the generated questions, each on a new line, without any numbering or bullet points."
+                f"First, critically evaluate the following content: '{initial_query}'.\n"
+                f"STEP 1: Determine if this content contains ANY factual claims or assertions that could potentially be misinformation or disinformation. A factual claim is any statement presented as fact rather than opinion, even if subtle or implied.\n\n"
+                f"If the content contains NO factual claims whatsoever (e.g., it's purely opinion, a personal question, hypothetical scenario, or just requesting information), respond ONLY with: 'NOT_FACT_CHECKABLE'.\n\n"
+                f"STEP 2: If the content DOES contain factual claims, identify the most important claims that would need verification to determine if the content contains misinformation.\n\n"
+                f"STEP 3: Generate exactly {num_questions} specific, direct questions that would help determine if the content contains misinformation. These questions should:\n"
+                f"- Target the key factual claims present in the content\n"
+                f"- Be phrased neutrally to avoid search bias\n"
+                f"- Focus on verifiable aspects (dates, statistics, events, relationships between entities)\n"
+                f"- Help establish the overall truthfulness of the content\n\n"
+                f"Return ONLY the generated questions without any numbering, commentary, or explanation. Each question should be on a new line."
             )
             
             response = model.generate_content(prompt)
@@ -40,16 +45,40 @@ class QuestionGeneratorAgent:
                 print(response.text)
                 print("-" * 30 + "\n\n")
 
-                if response.text.lower() == "not enough context":
-                    print("Gemini summarised that the user query is not enough context to generate questions.")
+                # Check for the special "NOT_FACT_CHECKABLE" response
+                if "NOT_FACT_CHECKABLE" in response.text.upper():
+                    print("Content does not contain factual claims that can be verified.")
+                    return ["not enough context"]
+                elif response.text.lower().strip() == "not enough context":
+                    print("Gemini indicated that the user query is not enough context to generate questions.")
                     return ["not enough context"]
                 else:
-                    questions = [q.strip() for q in response.text.split('\n') if q.strip()]
-                    print(f"Generated {len(questions)} questions:")
-                    for i, q in enumerate(questions):
+                    # Clean up the questions by removing any potential numbering or bullet points
+                    raw_questions = [q.strip() for q in response.text.split('\n') if q.strip()]
+                    cleaned_questions = []
+                    
+                    for q in raw_questions:
+                        # Remove numbering (e.g., "1.", "1)", "[1]", etc.)
+                        q = re.sub(r'^\s*[\[\(]?\d+[\.\)\]]?\s*', '', q)
+                        # Remove bullet points
+                        q = re.sub(r'^\s*[-•*]\s*', '', q)
+                        if q and any(q.endswith(c) for c in ['?', '.', '!']):  # Ensure it's a question or statement
+                            cleaned_questions.append(q)
+                    
+                    # If we have more questions than requested, trim to the requested amount
+                    if len(cleaned_questions) > num_questions:
+                        cleaned_questions = cleaned_questions[:num_questions]
+                    
+                    # If we somehow have no valid questions after cleaning, use the original query
+                    if not cleaned_questions:
+                        print("No valid questions were generated after cleaning.")
+                        return [initial_query]
+                        
+                    print(f"Generated {len(cleaned_questions)} questions:")
+                    for i, q in enumerate(cleaned_questions):
                         print(f"  {i+1}. {q}")
                     print("-" * 30)
-                    return questions
+                    return cleaned_questions
             else:
                 print("Gemini did not return any questions.")
                 return [initial_query] # Fallback to the original query
