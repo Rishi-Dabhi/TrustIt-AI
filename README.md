@@ -34,7 +34,7 @@ This application integrates Portia's agent capabilities with Tavily's search API
 2. Set up a virtual environment
    ```
    python -m venv portia-env-py311
-   source portia-env-py311/bin/activate  # On Windows: portia-env-py311\Scripts\activate
+   Run venv ---- source portia-env-py311/bin/activate  # On Windows: portia-env-py311\Scripts\activate
    ```
 
 3. Install dependencies
@@ -110,4 +110,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-uvicorn backend.server:app --reload --host 0.0.0.0 --port 8002
+Load Backend --- uvicorn backend.server:app --reload --host 0.0.0.0 --port 8002
