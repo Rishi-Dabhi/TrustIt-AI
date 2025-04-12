@@ -7,6 +7,7 @@ import os
 from typing import Dict, Any, List
 from pydantic import BaseModel, Field
 import re
+import yaml
 
 from portia import (
     Config,
@@ -159,6 +160,16 @@ class PortiaFactChecker:
             llm_model_name=LLMModel.GEMINI_2_0_FLASH,
             google_api_key=self.config["google_api_key"]
         )
+        
+        # Load portia_agent personality
+        try:
+            personality_path = "backend/config/personalities/portia_agent.yaml"
+            with open(personality_path, "r") as f:
+                self.personality = yaml.safe_load(f)
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to load portia_agent personality: {e}")
+            self.personality = None
         
         # Only include Question Generator tool for Portia planning phase
         tools = [
