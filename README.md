@@ -110,4 +110,33 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
+## TrustIt-AI Integration with Portia
+
+TrustIt-AI now integrates with [Portia](https://github.com/portiaAI/portia-sdk-python), an AI orchestration platform that provides:
+
+1. **Multi-agent planning** - Guides LLMs to produce structured plans for complex fact-checking
+2. **Stateful workflows** - Tracks progress through the fact-checking pipeline
+3. **Authenticated tool calling** - Seamlessly integrates with search and other tools
+
+The integration allows for a more robust fact-checking pipeline with better visibility into the LLM's reasoning process.
+
+### Using Portia Integration
+
+By default, the system now uses Portia for fact-checking. To switch between the original pipeline and Portia, modify the `use_portia` flag in `main.py`:
+
+```python
+# Choose which processing method to use
+use_portia = True  # Set to False to use the original pipeline
+```
+
+### Required API Keys
+
+To use the Portia integration, ensure you have the following API keys in your `.env` file:
+
+```
+GOOGLE_API_KEY=your_google_api_key
+PORTIA_API_KEY=your_portia_api_key  # If using Portia cloud services
+TAVILY_API_KEY=your_tavily_api_key  # For internet search
+```
+
 uvicorn backend.server:app --reload --host 0.0.0.0 --port 8002
