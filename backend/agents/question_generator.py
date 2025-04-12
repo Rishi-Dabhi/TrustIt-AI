@@ -27,7 +27,7 @@ class QuestionGeneratorAgent:
             prompt = (
                 f"First, critically evaluate the following content: '{initial_query}'.\n"
                 f"STEP 1: Determine if this content contains ANY factual claims or assertions that could potentially be misinformation or disinformation. A factual claim is any statement presented as fact rather than opinion, even if subtle or implied.\n\n"
-                f"If the content contains NO factual claims whatsoever (e.g., it's purely opinion, a personal question, hypothetical scenario, or just requesting information), respond ONLY with: 'NOT_FACT_CHECKABLE'.\n\n"
+                f"If the content contains NO factual claims whatsoever (e.g., it's purely opinion, a personal question, hypothetical scenario, or just requesting information), respond ONLY with: 'not enough context'.\n\n"
                 f"STEP 2: If the content DOES contain factual claims, identify the most important claims that would need verification to determine if the content contains misinformation.\n\n"
                 f"STEP 3: Generate exactly {num_questions} specific, direct questions that would help determine if the content contains misinformation. These questions should:\n"
                 f"- Target the key factual claims present in the content\n"
@@ -46,10 +46,10 @@ class QuestionGeneratorAgent:
                 print("-" * 30 + "\n\n")
 
                 # Check for the special "NOT_FACT_CHECKABLE" response
-                if "NOT_FACT_CHECKABLE" in response.text.upper():
+                if "not enough context" in response.text.upper():
                     print("Content does not contain factual claims that can be verified.")
                     return ["not enough context"]
-                elif response.text.lower().strip() == "not enough context":
+                elif response.text.lower().strip().contains("NOT_FACT_CHECKABLE"):
                     print("Gemini indicated that the user query is not enough context to generate questions.")
                     return ["not enough context"]
                 else:

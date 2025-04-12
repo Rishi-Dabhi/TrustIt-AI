@@ -1,0 +1,29 @@
+{
+    "name": "Veracity Engine",
+    "version": "1.0",
+    "description": "checks your news pages for unverifiable info",
+    "manifest_version": 3,
+    "icons": {
+        "16": "public/icons/tick-all.svg",
+        "48": "public/icons/tick-all.svg",
+        "128": "public/icons/tick-all.svg"
+    },
+    "permissions": [
+      "tabs",
+      "webNavigation",
+      "scripting"
+    ],
+    "host_permissions": [
+    "ws://localhost/*",
+    "wss://localhost/*",
+    "ws://192.168.122.1/*",
+    "wss://192.168.122.1/*",
+    "wss://ws.veracity-engine.rocks/*"
+    ],
+    "background": {
+      "service_worker": "src/background/background.js",
+      "type": "module"
+    },
+    "minimum_chrome_version": "116"
+  }
+  

@@ -226,18 +226,19 @@ class PortiaFactChecker:
             # === Step 1: Generate Questions using Portia Planner ===
             logging.info("Step 1: Generating questions using Portia Planner...")
             # Prompt focused only on question generation or "not enough context"
-            base_prompt = """
-            Critically evaluate the following content: '{content}'
-            Determine if it contains factual claims suitable for investigation or if it's subjective, unverifiable, nonsensical, or too vague.
-            If unsuitable for fact-checking, return ONLY the exact text: 'not enough context'.
-            Otherwise, generate 3 specific, concise questions targeting the main factual claims. Return ONLY the questions, each on a new line.
-            """
-            
-            # Add personality system prompt if available
-            if self.personality and "system_prompt" in self.personality:
-                question_prompt = f"{self.personality['system_prompt']}\n\n{base_prompt.format(content=content)}"
-            else:
-                question_prompt = base_prompt.format(content=content)
+
+            question_prompt = (
+                f"First, critically evaluate the following content: '{content}'.\n"
+                f"STEP 1: Determine if this content contains ANY factual claims or assertions that could potentially be misinformation or disinformation. A factual claim is any statement presented as fact rather than opinion, even if subtle or implied.\n\n"
+                f"If the content contains NO factual claims whatsoever (e.g., it's purely opinion, a personal question, hypothetical scenario, or just requesting information), OR if it already only contains 'not enough context', respond ONLY with: 'not enough context'.\n\n" 
+                f"STEP 2: If the content DOES contain factual claims, identify the most important claims that would need verification to determine if the content contains misinformation.\n\n"
+                f"STEP 3: Generate exactly 3 specific, direct questions that would help determine if the content contains misinformation. These questions should:\n"
+                f"- Target the key factual claims present in the content\n"
+                f"- Be phrased neutrally to avoid search bias\n"
+                f"- Focus on verifiable aspects (dates, statistics, events, relationships between entities)\n"
+                f"- Help establish the overall truthfulness of the content\n\n"
+                f"Return ONLY the generated questions without any numbering, commentary, or explanation. Each question should be on a new line."
+            )
             
             # Generate and run the plan for question generation
             plan = self.portia_planner.plan(query=question_prompt)
