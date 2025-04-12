@@ -4,6 +4,7 @@ Agent responsible for making the final authenticity judgment based on fact check
 from typing import Dict, Any, List, Tuple
 import re
 from urllib.parse import urlparse
+import logging
 
 class JudgeAgent:
     """
@@ -18,15 +19,15 @@ class JudgeAgent:
         """
         self.config = config
         # Define thresholds for judgment (can be moved to config later)
-        self.real_threshold = 0.7
-        self.fake_threshold = 0.3
+        self.real_threshold = 0.7  # Average confidence score threshold for REAL
+        self.fake_threshold = 0.3  # Average confidence score threshold for FAKE
         
         # Map verification statuses to categories for judgment
         self.verified_statuses = {
-            "verified", "true", "correct", "accurate", "confirmed"
+            "verified", "true", "correct", "accurate", "confirmed", "real"
         }
         self.false_statuses = {
-            "false", "incorrect", "untrue", "misleading", "fake"
+            "false", "incorrect", "untrue", "misleading", "fake", "partially true", "partially false"
         }
         self.uncertain_statuses = {
             "unknown", "uncertain", "unable to verify", "insufficient evidence", 
@@ -54,6 +55,9 @@ class JudgeAgent:
             ".xyz", ".info", "conspiracy", "alternative", "rumor", 
             "political", "partisan", "biased"
         }
+
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
 
     def _evaluate_sources(self, fact_checks: List[Dict[str, Any]]) -> Tuple[float, str]:
         """
@@ -171,217 +175,122 @@ class JudgeAgent:
         
         return avg_confidence
 
+    def _normalize_status(self, status: str) -> str:
+        """Normalize various status strings to canonical values: 'verified', 'false', 'uncertain'."""
+        status_lower = status.lower().strip().replace("verification status:", "").strip()
+        if status_lower in self.verified_statuses:
+            return "verified"
+        elif status_lower in self.false_statuses:
+            return "false"
+        elif status_lower in self.uncertain_statuses:
+            return "uncertain"
+        else:
+            self.logger.warning(f"Unrecognized verification status '{status}' treated as uncertain.")
+            return "uncertain"
+
     def judge(self, fact_checks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Makes a final judgment based on the provided fact checks.
 
         Args:
-            fact_checks: A list of fact-checking results, where each item
-                         is expected to have an 'analysis' dictionary
-                         containing a 'verification_status'.
+            fact_checks: A list of fact-checking analysis results, where each item
+                         is expected to have 'verification_status' and 'confidence_score'.
 
         Returns:
-            A dictionary containing the final judgment ('real', 'fake', 'uncertain')
+            A dictionary containing the final judgment ('REAL', 'FAKE', 'MISLEADING', 'UNCERTAIN')
             and the calculated confidence score (0.0 to 1.0).
             Returns an error structure if input is invalid.
         """
         if not fact_checks:
-            print("--- [JUDGE] No fact checks provided")
+            self.logger.warning("No fact checks provided to JudgeAgent.")
             return {
-                "judgment": "uncertain",
+                "judgment": "UNCERTAIN",
                 "confidence_score": 0.0,
-                "reason": "No fact checks provided."
+                "reason": "No fact checks provided for judgment."
             }
 
-        # Initialize counters for different verification statuses
+        # Initialize counters and scores
         verified_count = 0
         false_count = 0
         uncertain_count = 0
-        partially_true_count = 0
+        total_confidence = 0.0
         total_checks = len(fact_checks)
-        
-        # Track checks with supporting evidence
-        checks_with_evidence = 0
-        
-        # Store reasons for later summary
-        verification_reasons = []
+        highest_false_confidence = 0.0 # Track confidence of FAKE claims
+        highest_verified_confidence = 0.0 # Track confidence of REAL claims
+        reasons = []
 
-        print(f"--- [JUDGE] Analyzing {total_checks} fact checks")
+        self.logger.info(f"Judging based on {total_checks} fact check analyses.")
         
-        # First, print out all the verification statuses for debugging
-        for i, check in enumerate(fact_checks):
+        for i, analysis in enumerate(fact_checks):
             try:
-                # Get the verification status and normalize to lowercase for comparison
-                status = check.get('analysis', {}).get('verification_status', '').lower()
-                
-                # Get supporting evidence and reasoning - we'll use these to determine
-                # if the fact check was properly completed
-                supporting_evidence = check.get('analysis', {}).get('supporting_evidence', [])
-                contradicting_evidence = check.get('analysis', {}).get('contradicting_evidence', [])
-                reasoning = check.get('analysis', {}).get('reasoning', '')
-                
-                print(f"--- [JUDGE] Check #{i+1} status: '{status}'")
-                print(f"--- [JUDGE] Check #{i+1} has {len(supporting_evidence)} supporting and {len(contradicting_evidence)} contradicting evidence points")
-                
-                # Count checks with actual evidence
-                if supporting_evidence or contradicting_evidence or reasoning:
-                    checks_with_evidence += 1
-                
-                # Collect a brief reason for this verification
-                brief_reason = f"Check #{i+1}: {status.capitalize()}"
-                if reasoning:
-                    # Add a short excerpt from reasoning
-                    brief_reason += f" - {reasoning[:80]}..." if len(reasoning) > 80 else f" - {reasoning}"
-                verification_reasons.append(brief_reason)
-                
-            except Exception as e:
-                print(f"--- [JUDGE] Warning: Error parsing check #{i+1}: {e}")
+                raw_status = analysis.get('verification_status', 'uncertain')
+                confidence = float(analysis.get('confidence_score', 0.0))
+                normalized_status = self._normalize_status(raw_status)
+                reason_snippet = analysis.get('reasoning', '')[:100] # Get a snippet of reasoning if available
 
-        # If few checks have proper evidence or reasoning, fall back to source evaluation
-        if checks_with_evidence / total_checks < 0.5:
-            print(f"--- [JUDGE] Only {checks_with_evidence}/{total_checks} checks have proper evidence or reasoning")
-            print("--- [JUDGE] Falling back to source evaluation method")
-            
-            source_score, reasoning = self._evaluate_sources(fact_checks)
-            
-            print(f"--- [JUDGE] Source evaluation score: {source_score:.2f}")
-            print(f"--- [JUDGE] Reasoning: {reasoning}")
-            
-            if source_score >= 0.7:
-                judgment = "real"
-                confidence_score = source_score
-                print(f"--- [JUDGE] Final judgment based on sources: REAL (confidence: {confidence_score:.2f})")
-            elif source_score <= 0.3:
-                judgment = "fake"
-                confidence_score = 1 - source_score
-                print(f"--- [JUDGE] Final judgment based on sources: FAKE (confidence: {confidence_score:.2f})")
-            else:
-                judgment = "uncertain"
-                confidence_score = 0.5
-                print(f"--- [JUDGE] Final judgment based on sources: UNCERTAIN (confidence: {confidence_score:.2f})")
+                self.logger.info(f"Check #{i+1}: Raw Status='{raw_status}', Norm Status='{normalized_status}', Confidence={confidence:.2f}")
                 
-            return {
-                "judgment": judgment,
-                "confidence_score": confidence_score,
-                "reason": reasoning
-            }
+                total_confidence += confidence
 
-        # Process all checks to categorize them
-        for check in fact_checks:
-            try:
-                # Get the verification status and normalize
-                status = check.get('analysis', {}).get('verification_status', '').lower()
-                
-                # Remove any "Verification Status:" prefix if present
-                if "verification status:" in status:
-                    status = status.replace("verification status:", "").strip()
-                
-                # Map to our categories based on the status
-                if any(term in status for term in self.verified_statuses):
+                if normalized_status == "verified":
                     verified_count += 1
-                elif any(term in status for term in self.false_statuses):
+                    highest_verified_confidence = max(highest_verified_confidence, confidence)
+                    reasons.append(f"Claim {i+1} verified (Confidence: {confidence:.2f}). {reason_snippet}")
+                elif normalized_status == "false":
                     false_count += 1
-                elif "partially true" in status:
-                    # Count partially true separately
-                    partially_true_count += 1
-                elif any(term in status for term in self.uncertain_statuses):
+                    highest_false_confidence = max(highest_false_confidence, confidence)
+                    reasons.append(f"Claim {i+1} deemed false/misleading (Confidence: {confidence:.2f}). {reason_snippet}")
+                else: # uncertain
                     uncertain_count += 1
-                else:
-                    # For unrecognized statuses, use the confidence score to decide
-                    # If confidence is high, it's likely a positive verification
-                    confidence = check.get('analysis', {}).get('confidence_score', 0.0)
-                    if confidence > 0.7:
-                        verified_count += 1
-                    elif confidence < 0.3:
-                        false_count += 1
-                    else:
-                        uncertain_count += 1
-                        
+                    reasons.append(f"Claim {i+1} uncertain (Confidence: {confidence:.2f}). {reason_snippet}")
+
             except Exception as e:
-                print(f"--- [JUDGE] Warning: Error categorizing check: {e}")
-                uncertain_count += 1  # Count as uncertain if there's an error
+                self.logger.error(f"Error processing fact check analysis #{i+1}: {e}", exc_info=True)
+                uncertain_count += 1 # Treat errors as uncertain
+                total_confidence += 0.0 # Assign zero confidence on error
 
-        # If we couldn't categorize any checks properly
-        if verified_count + false_count + partially_true_count + uncertain_count == 0:
-            return {
-                "judgment": "uncertain",
-                "confidence_score": 0.0,
-                "reason": "No valid verification statuses found in fact checks."
-            }
-
-        # Calculate ratios for each category
-        verified_ratio = verified_count / total_checks
-        false_ratio = false_count / total_checks
-        partially_true_ratio = partially_true_count / total_checks
-        uncertain_ratio = uncertain_count / total_checks
-        
-        # Calculate the average confidence score from all fact checks
-        average_confidence = self._calculate_average_confidence(fact_checks)
-        print(f"--- [JUDGE] Average confidence from all fact checks: {average_confidence:.2f}")
-        
-        print(f"--- [JUDGE] Verified: {verified_count}/{total_checks} ({verified_ratio:.2f})")
-        print(f"--- [JUDGE] False: {false_count}/{total_checks} ({false_ratio:.2f})")
-        print(f"--- [JUDGE] Partially True: {partially_true_count}/{total_checks} ({partially_true_ratio:.2f})")
-        print(f"--- [JUDGE] Uncertain: {uncertain_count}/{total_checks} ({uncertain_ratio:.2f})")
-
-        # Special case: If most checks are uncertain, the judgment should reflect that
-        if uncertain_ratio > 0.7:
-            print(f"--- [JUDGE] Final judgment: UNCERTAIN (average confidence: {average_confidence:.2f})")
-            reason = "Most fact checks yielded uncertain results, suggesting insufficient evidence."
-            if verification_reasons:
-                reason += "\n\nSummary of key findings:\n- " + "\n- ".join(verification_reasons[:3])
-            return {
-                "judgment": "uncertain",
-                "confidence_score": average_confidence,  # Use average confidence instead of uncertain_ratio
-                "reason": reason
-            }
-
-        # For high confidence situations, use the full confidence score
-        # instead of the ratio-based calculation previously used
-        if average_confidence > 0.9:
-            print(f"--- [JUDGE] All checks have high confidence: {average_confidence:.2f}")
-            # Use the average confidence directly
-            confidence_score = average_confidence
+        if total_checks == 0:
+             average_confidence = 0.0
         else:
-            # Use the old calculation for mixed confidence scenarios
-            if verified_ratio >= self.real_threshold:
-                confidence_score = (verified_ratio + average_confidence) / 2
-            elif false_ratio >= self.fake_threshold:
-                confidence_score = (false_ratio + average_confidence) / 2
-            else:
-                confidence_score = average_confidence
+            average_confidence = total_confidence / total_checks
+        
+        # Ensure confidence is within the 0.0 to 1.0 range
+        final_confidence = max(0.0, min(1.0, average_confidence))
 
-        # Include "partially true" with "verified" for threshold calculations
-        # when determining final judgment
-        effective_verified_ratio = verified_ratio + (partially_true_ratio * 0.5)
-        print(f"--- [JUDGE] Effective verified ratio (including partial truths): {effective_verified_ratio:.2f}")
-
-        # Determine judgment based on verified vs. false ratios
-        if effective_verified_ratio >= self.real_threshold:
-            print(f"--- [JUDGE] Final judgment: REAL (confidence: {confidence_score:.2f})")
-            judgment = "real"
-        elif false_ratio >= self.fake_threshold:
-            print(f"--- [JUDGE] Final judgment: FAKE (confidence: {confidence_score:.2f})")
-            judgment = "fake"
-        else:
-            # If neither threshold is met, use the strongest signal
-            if effective_verified_ratio > false_ratio:
-                print(f"--- [JUDGE] Final judgment: REAL with moderate confidence ({confidence_score:.2f})")
-                judgment = "real"
-            elif false_ratio > effective_verified_ratio:
-                print(f"--- [JUDGE] Final judgment: FAKE with moderate confidence ({confidence_score:.2f})")
-                judgment = "fake"
-            else:
-                print(f"--- [JUDGE] Final judgment: UNCERTAIN (equal evidence for both sides)")
-                judgment = "uncertain"
-
-        # Create a detailed reason including summary of key findings
-        reason = f"Based on {verified_count} verified, {false_count} false, {partially_true_count} partially true, and {uncertain_count} uncertain fact checks."
-        if verification_reasons:
-            reason += "\n\nSummary of key findings:\n- " + "\n- ".join(verification_reasons[:3])
+        # Determine final judgment based on counts and confidence
+        judgment = "UNCERTAIN"
+        
+        # Priority 1: If any claim is confidently false/misleading, judgment is FAKE or MISLEADING
+        if false_count > 0 and highest_false_confidence >= 0.7:
+             judgment = "FAKE"
+             # Use the highest confidence of the FAKE claims as the overall confidence
+             final_confidence = max(0.5, min(1.0, highest_false_confidence))
+        elif false_count > 0: # If there are false claims but not high confidence
+            judgment = "MISLEADING"
+            # Confidence reflects average, but capped lower due to misleading nature
+            final_confidence = max(0.5, min(0.8, final_confidence)) 
             
+        # Priority 2: If most claims are verified with high confidence
+        elif verified_count / total_checks >= 0.6 and average_confidence >= self.real_threshold:
+             judgment = "REAL"
+             # Confidence reflects average, potentially boosted by strong verification
+             final_confidence = max(0.5, min(1.0, average_confidence))
+             final_confidence = max(final_confidence, highest_verified_confidence) # Ensure it's at least the highest verified
+             
+        # Priority 3: If mostly uncertain or mixed low-confidence results
+        else:
+            judgment = "UNCERTAIN"
+            # Confidence reflects the average, likely lower
+            final_confidence = max(0.5, min(0.7, final_confidence)) 
+
+        # Compile the final reasoning string
+        summary_reason = f"Judgment based on {total_checks} claims: {verified_count} verified, {false_count} false/misleading, {uncertain_count} uncertain. Average Confidence: {average_confidence:.2f}. "
+        summary_reason += " || ".join(reasons)
+
+        self.logger.info(f"Final Judgment: {judgment}, Final Confidence: {final_confidence:.2f}")
+
         return {
             "judgment": judgment,
-            "confidence_score": confidence_score,
-            "reason": reason
+            "confidence_score": final_confidence,
+            "reason": summary_reason
         } 
