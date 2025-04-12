@@ -26,18 +26,21 @@ This application integrates Portia's agent capabilities with Tavily's search API
 ### Installation
 
 1. Clone the repository
+
    ```
    git clone https://github.com/yourusername/TrustIt-AI.git
    cd TrustIt-AI
    ```
 
 2. Set up a virtual environment
+
    ```
    python -m venv portia-env-py311
-   source portia-env-py311/bin/activate  # On Windows: portia-env-py311\Scripts\activate
+   Run venv ---- source portia-env-py311/bin/activate  # On Windows: portia-env-py311\Scripts\activate
    ```
 
 3. Install dependencies
+
    ```
    pip install portia-ai python-dotenv google-generativeai requests pydantic
    ```
@@ -66,6 +69,7 @@ python -m backend.cli "your search query here"
 ```
 
 For example:
+
 ```
 python -m backend.cli "who is the current UK prime minister"
 ```
@@ -139,4 +143,10 @@ PORTIA_API_KEY=your_portia_api_key  # If using Portia cloud services
 TAVILY_API_KEY=your_tavily_api_key  # For internet search
 ```
 
+## Running the Backend Server
+
+To start the backend server, run:
+
+```
 uvicorn backend.server:app --reload --host 0.0.0.0 --port 8002
+```
