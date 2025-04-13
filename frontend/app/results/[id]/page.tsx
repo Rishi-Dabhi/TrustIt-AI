@@ -779,7 +779,7 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
                 {showProcessLog ? 'Hide Log' : 'Show Log'}
               </Button>
               
-              <Button 
+              {/* <Button 
                 variant="outline" 
                 size="sm" 
                 className="gap-1 rounded-lg border-gray-200"
@@ -801,7 +801,7 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
               >
                 <RotateCcw className="h-4 w-4" />
                 Reset
-              </Button>
+              </Button> */}
             </div>
           </div>
           
