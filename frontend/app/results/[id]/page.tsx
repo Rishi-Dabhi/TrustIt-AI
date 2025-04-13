@@ -62,6 +62,7 @@ interface ConversationMessage {
 // New interfaces for Pusher updates
 interface ProcessUpdate {
   message: string;
+  detail?: string;
   stage: string;
   progress: number;
   timestamp?: number;
@@ -74,6 +75,9 @@ interface ProcessUpdate {
   confidence?: number;
   reason?: string;
   error?: string;
+  operation?: string;
+  tool?: string;
+  step?: string;
 }
 
 export default function ResultsPage({ params }: { params: { id: string } }) {
@@ -185,7 +189,7 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
       'portia_plan_created', 'portia_plan_complete', 'not_enough_context', 
       'questions_generated', 'fact_checking_started', 'checking_question',
       'fact_checking_complete', 'fact_check_result', 'judging_started',
-      'judgment_complete', 'process_complete', 'error'
+      'judgment_complete', 'process_complete', 'error', 'portia_internal'
     ];
     
     // Generic handler for all events
@@ -829,16 +833,47 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
             {/* Loading Indicator */}
             {loading && progressUpdates.length > 0 && (
               <div 
-                className="flex items-center gap-3 p-4 mb-4 bg-blue-50 rounded-xl border border-blue-100 animate-fadeIn"
+                className="flex items-start gap-3 p-4 mb-4 bg-blue-50 rounded-xl border border-blue-100 animate-fadeIn shadow-sm"
               >
-                <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
-                <div>
-                  <p className="text-blue-700">
+                <div className="mt-1">
+                  <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+                </div>
+                <div className="flex-1">
+                  {/* Main update message */}
+                  <p className="text-blue-700 font-medium">
                     {progressUpdates[progressUpdates.length - 1]?.message || "Processing..."}
                   </p>
-                  <p className="text-xs text-blue-500 mt-1">
-                    Stage: {currentStage} ({progressPercent}% complete)
+                  
+                  {/* Detailed operation description */}
+                  <p className="text-sm text-blue-500 mt-1">
+                    {progressUpdates[progressUpdates.length - 1]?.detail || `Stage: ${currentStage} (${progressPercent}% complete)`}
                   </p>
+
+                  {/* Show Portia's internal operations if available */}
+                  {progressUpdates.length > 1 && 
+                    progressUpdates
+                      .slice(-8) // Get the last 8 updates
+                      .filter(update => update.operation) // Only show those with operation property
+                      .slice(-3) // Take just the 3 most recent operation updates
+                      .map((update, i) => (
+                        <div key={i} className="mt-2 p-2 bg-blue-100 rounded-lg text-xs font-mono">
+                          <div className="flex items-center">
+                            <span className="text-blue-800 font-semibold">{update.operation}:</span>
+                            <span className="text-blue-600 ml-1">{update.message}</span>
+                          </div>
+                          {update.tool && (
+                            <span className="block mt-1 text-blue-700">
+                              <span className="font-semibold">Tool:</span> {update.tool}
+                            </span>
+                          )}
+                          {update.step && (
+                            <span className="block mt-1 text-blue-700 truncate">
+                              <span className="font-semibold">Step:</span> {update.step.length > 50 ? update.step.substring(0, 50) + '...' : update.step}
+                            </span>
+                          )}
+                        </div>
+                      ))
+                  }
                 </div>
               </div>
             )}
