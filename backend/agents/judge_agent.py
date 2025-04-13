@@ -269,6 +269,9 @@ class JudgeAgent:
         # Ensure confidence is within the 0.0 to 1.0 range
         final_confidence = max(0.0, min(1.0, average_confidence))
 
+        # Calculate the ratio of verified claims to total claims
+        verified_ratio = verified_count / total_checks if total_checks > 0 else 0
+        
         # Determine final judgment based on counts and confidence
         judgment = "UNCERTAIN"
         
@@ -277,7 +280,14 @@ class JudgeAgent:
              judgment = "FAKE"
              # Use the highest confidence of the FAKE claims as the overall confidence
              final_confidence = max(0.5, min(1.0, highest_false_confidence))
-        # Priority 2: If there are partially true claims or mix of true/false, judgment is MISLEADING
+        
+        # Priority 2: If high ratio of verified claims with some partially true, can still be REAL
+        elif verified_ratio >= 0.66 and verified_count >= 2 and false_count == 0 and average_confidence >= self.real_threshold:
+            # Predominantly verified with some partially true claims = still REAL
+            judgment = "REAL"
+            final_confidence = max(0.5, min(0.9, average_confidence))
+        
+        # Priority 3: If there are partially true claims or mix of true/false, judgment is MISLEADING
         elif partially_true_count > 0 or (false_count > 0 and verified_count > 0):
             judgment = "MISLEADING"
             # For MISLEADING, use the highest confidence of partially true claims
@@ -286,13 +296,15 @@ class JudgeAgent:
             else:
                 # Or average confidence if mixed true/false
                 final_confidence = max(0.5, min(0.8, final_confidence))
-        # Priority 3: If most claims are verified with high confidence
+        
+        # Priority 4: If most claims are verified with high confidence
         elif verified_count / total_checks >= 0.6 and average_confidence >= self.real_threshold:
              judgment = "REAL"
              # Confidence reflects average, potentially boosted by strong verification
              final_confidence = max(0.5, min(1.0, average_confidence))
              final_confidence = max(final_confidence, highest_verified_confidence) # Ensure it's at least the highest verified
-        # Priority 4: If mostly uncertain or mixed low-confidence results
+        
+        # Priority 5: If mostly uncertain or mixed low-confidence results
         else:
             judgment = "UNCERTAIN"
             # Confidence reflects the average, likely lower
