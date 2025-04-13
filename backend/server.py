@@ -37,6 +37,7 @@ app.add_middleware(
 class ContentRequest(BaseModel):
     content: str
     use_portia: bool = True  # Default to using Portia pipeline
+    sessionId: Optional[str] = None  # Optional session ID for real-time updates via Pusher
 
 @app.post("/api/process")
 async def process_text(request: ContentRequest) -> Dict[str, Any]:
@@ -46,8 +47,8 @@ async def process_text(request: ContentRequest) -> Dict[str, Any]:
         
         # Choose which processing method to use based on request
         if request.use_portia:
-            logger.info(f"Processing content with Portia: '{request.content[:50]}...'")
-            result = await process_content_with_portia(request.content, config)
+            logger.info(f"Processing content with Portia: '{request.content[:50]}...', Session ID: {request.sessionId or 'None'}")
+            result = await process_content_with_portia(request.content, config, request.sessionId)
         else:
             logger.info(f"Processing content with original pipeline: '{request.content[:50]}...'")
             result = await process_content(request.content, config)

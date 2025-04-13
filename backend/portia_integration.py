@@ -8,6 +8,10 @@ from typing import Dict, Any, List
 from pydantic import BaseModel, Field
 import re
 import yaml
+import pusher
+import json
+import uuid
+import time
 
 from portia import (
     Config,
@@ -21,6 +25,42 @@ from portia import (
 # Import existing agents/services to reuse their functionality
 from .agents import QuestionGeneratorAgent, FactCheckingAgent, JudgeAgent
 from .tools import TavilySearchTool
+
+# ------ Pusher Integration ------
+class PusherClient:
+    """Client for streaming real-time updates via Pusher"""
+    
+    def __init__(self, config):
+        self.enabled = config.get("enable_pusher", True)
+        
+        if self.enabled:
+            try:
+                self.client = pusher.Pusher(
+                    app_id=config.get("pusher_app_id", "1973936"),
+                    key=config.get("pusher_key", "4cdf071584bc2fb15aa8"),
+                    secret=config.get("pusher_secret", "0ac70eebeef0516264fe"),
+                    cluster=config.get("pusher_cluster", "eu"),
+                    ssl=True
+                )
+            except Exception as e:
+                import logging
+                logging.error(f"Failed to initialize Pusher: {e}")
+                self.enabled = False
+    
+    def send_update(self, session_id, event_type, data):
+        """Send an update to the client via Pusher"""
+        if not self.enabled:
+            return
+            
+        try:
+            self.client.trigger(
+                f'fact-check-{session_id}',
+                event_type,
+                data
+            )
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to send Pusher update: {e}")
 
 # ------ Custom Tool Definitions ------
 
@@ -152,6 +192,7 @@ class PortiaFactChecker:
         self.fact_checking_agent = FactCheckingAgent(config)
         self.judge_agent = JudgeAgent(config)
         self._initialize_portia_for_questions() # Renamed initialization
+        self.pusher = PusherClient(config)
     
     def _initialize_portia_for_questions(self):
         """Initialize Portia with only the QuestionGeneratorTool for planning"""
@@ -217,16 +258,35 @@ class PortiaFactChecker:
         
         return status_mapping.get(status.lower(), status.upper())
     
-    async def process_content(self, content: str) -> Dict[str, Any]:
+    async def process_content(self, content: str, session_id: str = None) -> Dict[str, Any]:
         """Process content through fact-checking pipeline: QGen (Portia Plan) -> FactCheck (Manual Loop) -> Judge (Manual Call)"""
         import logging
         import asyncio
 
+        # Generate a session ID if none is provided
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            
         try:
+            # Send initial status update
+            self.pusher.send_update(session_id, 'process_started', {
+                'status': 'started',
+                'message': 'Starting fact-checking process',
+                'stage': 'initialization',
+                'timestamp': time.time()
+            })
+
             # === Step 1: Generate Questions using Portia Planner ===
             logging.info("Step 1: Generating questions using Portia Planner...")
+            # Update status
+            self.pusher.send_update(session_id, 'status_update', {
+                'status': 'in_progress',
+                'message': 'Generating questions to fact check',
+                'stage': 'question_generation',
+                'progress': 10
+            })
+            
             # Prompt focused only on question generation or "not enough context"
-
             question_prompt = (
                 f"First, critically evaluate the following content: '{content}'.\n"
                 f"STEP 1: Determine if this content contains ANY factual claims or assertions that could potentially be misinformation or disinformation. A factual claim is any statement presented as fact rather than opinion, even if subtle or implied.\n\n"
@@ -240,9 +300,33 @@ class PortiaFactChecker:
                 f"Return ONLY the generated questions without any numbering, commentary, or explanation. Each question should be on a new line."
             )
             
+            # Share with frontend that planning has started
+            self.pusher.send_update(session_id, 'portia_planning', {
+                'message': 'Portia is planning how to generate questions',
+                'stage': 'planning',
+                'progress': 15
+            })
+            
             # Generate and run the plan for question generation
             plan = self.portia_planner.plan(query=question_prompt)
+            
+            # Share the plan with frontend
+            self.pusher.send_update(session_id, 'portia_plan_created', {
+                'message': 'Question generation plan created',
+                'plan': str(plan),
+                'stage': 'plan_execution',
+                'progress': 25
+            })
+            
+            # Execute plan with progress updates
             result = self.portia_planner.run_plan(plan)
+            
+            # Update on plan completion
+            self.pusher.send_update(session_id, 'portia_plan_complete', {
+                'message': 'Question generation complete',
+                'stage': 'questions_ready',
+                'progress': 35
+            })
             
             logging.info(f"Portia Question Gen Plan: {plan}")
             logging.info(f"Portia Question Gen Result State: {result.state}")
@@ -258,6 +342,11 @@ class PortiaFactChecker:
                          # Handle "not enough context" or newline-separated questions
                         if "not enough context" in output_value.lower():
                              logging.info("Detected 'not enough context' from question generation.")
+                             self.pusher.send_update(session_id, 'not_enough_context', {
+                                'message': 'Not enough factual claims to verify',
+                                'stage': 'complete',
+                                'progress': 100
+                             })
                              return {
                                 "initial_questions": [], "fact_checks": [], "follow_up_questions": [], "recommendations": [],
                                 "judgment": "Not enough context",
@@ -269,6 +358,12 @@ class PortiaFactChecker:
             
             if not questions:
                  logging.warning("No questions generated or extracted from Portia plan.")
+                 # Update frontend about error
+                 self.pusher.send_update(session_id, 'error', {
+                    'message': 'Failed to generate questions',
+                    'stage': 'error',
+                    'progress': 100
+                 })
                  # Decide if this is an error or "not enough context" based on earlier check potentially missed
                  return {
                      "initial_questions": [], "fact_checks": [], "follow_up_questions": [], "recommendations": [],
@@ -277,24 +372,53 @@ class PortiaFactChecker:
                  }
 
             logging.info(f"Generated questions: {questions}")
+            
+            # Send generated questions to frontend
+            self.pusher.send_update(session_id, 'questions_generated', {
+                'message': 'Questions generated successfully',
+                'questions': questions,
+                'stage': 'fact_checking_prep',
+                'progress': 40
+            })
 
             # === Step 2: Fact-Check Each Question Manually ===
             logging.info(f"Step 2: Manually fact-checking {len(questions)} questions...")
+            self.pusher.send_update(session_id, 'fact_checking_started', {
+                'message': f'Starting fact-checking for {len(questions)} questions',
+                'stage': 'fact_checking',
+                'progress': 45
+            })
+            
             fact_checks_results = []
             fact_checking_tasks = []
 
             # Prepare async tasks for fact-checking each question
-            for q in questions:
+            for i, q in enumerate(questions):
                  input_data = {
                      "questions": [{"question": q}],
                      "content": content,
                      "metadata": {"timestamp": "now"} # Simplified timestamp
                  }
+                 # Update frontend about which question is being processed
+                 self.pusher.send_update(session_id, 'checking_question', {
+                    'message': f'Fact-checking question {i+1}/{len(questions)}',
+                    'question': q,
+                    'question_number': i+1,
+                    'stage': 'fact_checking',
+                    'progress': 45 + (i * (20 / len(questions)))
+                 })
                  # Use the agent directly
                  fact_checking_tasks.append(self.fact_checking_agent.process(input_data)) 
 
             # Run fact-checking tasks concurrently
             raw_fact_check_outputs = await asyncio.gather(*fact_checking_tasks)
+            
+            # Update frontend that fact-checking is complete
+            self.pusher.send_update(session_id, 'fact_checking_complete', {
+                'message': 'Fact-checking complete for all questions',
+                'stage': 'analyzing_results',
+                'progress': 70
+            })
             
             # Process results
             formatted_fact_checks = []
@@ -323,12 +447,27 @@ class PortiaFactChecker:
                      }
                  }
                  formatted_fact_checks.append(formatted_check)
+                 
+                 # Stream individual fact check results as they're processed
+                 self.pusher.send_update(session_id, 'fact_check_result', {
+                    'message': f'Fact check result for question {i+1}',
+                    'question_number': i+1,
+                    'question': q,
+                    'result': formatted_check,
+                    'stage': 'fact_check_results',
+                    'progress': 70 + (i * (10 / len(questions)))
+                 })
             
             logging.info(f"Finished fact-checking. Results count: {len(formatted_fact_checks)}")
 
-
             # === Step 3: Make Final Judgment Manually ===
             logging.info("Step 3: Manually calling Judge Agent...")
+            self.pusher.send_update(session_id, 'judging_started', {
+                'message': 'Making final judgment based on fact-checks',
+                'stage': 'judging',
+                'progress': 85
+            })
+            
             # Prepare input for the judge agent (expects list of analysis dicts)
             judge_input = [fc['analysis'] for fc in formatted_fact_checks if 'analysis' in fc]
             
@@ -353,9 +492,19 @@ class PortiaFactChecker:
             final_confidence = max(0.5, min(1.0, final_confidence))
 
             logging.info(f"Judge result: Judgment={final_judgment_mapped}, Confidence={final_confidence}")
+            
+            # Send judgment to frontend
+            self.pusher.send_update(session_id, 'judgment_complete', {
+                'message': 'Final judgment complete',
+                'judgment': final_judgment_mapped,
+                'confidence': final_confidence,
+                'reason': judgment_reason,
+                'stage': 'complete',
+                'progress': 100
+            })
 
             # === Step 4: Format and Return Final Response ===
-            return {
+            final_result = {
                 "initial_questions": questions,
                 "fact_checks": formatted_fact_checks, # Use the formatted checks from Step 2
                 "follow_up_questions": [], # Placeholder
@@ -374,10 +523,29 @@ class PortiaFactChecker:
                 }
             }
             
+            # Send complete result
+            self.pusher.send_update(session_id, 'process_complete', {
+                'message': 'Fact-checking process complete',
+                'result': final_result,
+                'stage': 'complete',
+                'progress': 100
+            })
+            
+            return final_result
+            
         except Exception as e:
             import traceback
             logging.error(f"Error in Portia processing: {str(e)}")
             traceback.print_exc()
+            
+            # Send error to frontend
+            self.pusher.send_update(session_id, 'error', {
+                'message': f'Error in fact-checking process: {str(e)}',
+                'error': str(e),
+                'stage': 'error',
+                'progress': 100
+            })
+            
             # Return detailed error
             return {
                 "initial_questions": [], "fact_checks": [], "follow_up_questions": [], "recommendations": [],

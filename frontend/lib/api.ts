@@ -19,17 +19,24 @@ export interface ProcessResponse {
   error?: string;
 }
 
-export async function processContent(content: string): Promise<ProcessResponse> {
+export async function processContent(content: string, sessionId?: string): Promise<ProcessResponse> {
   try {
     console.log('Sending request to:', `${API_BASE_URL}/api/process`);
     console.log('Content:', content);
+    
+    const requestBody: any = { content };
+    
+    // Add sessionId to request if provided
+    if (sessionId) {
+      requestBody.sessionId = sessionId;
+    }
     
     const response = await fetch(`${API_BASE_URL}/api/process`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
