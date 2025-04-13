@@ -18,9 +18,11 @@ import {
   RotateCcw,
   ArrowUpRight,
   PlusCircle,
-  Search
+  Search,
+  Terminal
 } from "lucide-react"
 import { processContent } from "@/lib/api"
+import Pusher from 'pusher-js'
 // Removed framer-motion imports that were causing issues
 
 // Keep the same interfaces from your original code
@@ -57,6 +59,27 @@ interface ConversationMessage {
   content: string | AnalysisResult;
 }
 
+// New interfaces for Pusher updates
+interface ProcessUpdate {
+  message: string;
+  detail?: string;
+  stage: string;
+  progress: number;
+  timestamp?: number;
+  plan?: string;
+  questions?: string[];
+  question?: string;
+  question_number?: number;
+  result?: any;
+  judgment?: string;
+  confidence?: number;
+  reason?: string;
+  error?: string;
+  operation?: string;
+  tool?: string;
+  step?: string;
+}
+
 export default function ResultsPage({ params }: { params: { id: string } }) {
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [loading, setLoading] = useState(true)
@@ -67,13 +90,36 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
   const [processingQueryId, setProcessingQueryId] = useState<string | null>(null)
   const [expandedSections, setExpandedSections] = useState<{[key: string]: boolean}>({})
   const [activeView, setActiveView] = useState<'conversation' | 'summary'>('conversation')
+  const [progressUpdates, setProgressUpdates] = useState<ProcessUpdate[]>([])
+  const [progressPercent, setProgressPercent] = useState<number>(0)
+  const [currentStage, setCurrentStage] = useState<string>('waiting')
+  const [showProcessLog, setShowProcessLog] = useState<boolean>(false)
+  
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const pusherRef = useRef<any>(null)
   
   // Add a request cache ref to prevent duplicate API calls
   const requestCacheRef = useRef<{[key: string]: Promise<any>}>({})
   
   const router = useRouter()
+
+  // Initialize Pusher when the component mounts
+  useEffect(() => {
+    // Enable pusher logging - don't include this in production
+    Pusher.logToConsole = true;
+    
+    pusherRef.current = new Pusher('4cdf071584bc2fb15aa8', {
+      cluster: 'eu'
+    });
+    
+    // Cleanup on unmount
+    return () => {
+      if (pusherRef.current) {
+        pusherRef.current.disconnect();
+      }
+    };
+  }, []);
 
   // Toggle expanded state for a specific section
   const toggleSection = (sectionId: string) => {
@@ -130,6 +176,77 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
     }
   }, [])
 
+  // Setup Pusher subscription for this specific session
+  useEffect(() => {
+    if (!params.id || !pusherRef.current) return;
+    
+    // Subscribe to the channel for this specific fact-check session
+    const channel = pusherRef.current.subscribe(`fact-check-${params.id}`);
+    
+    // Listen for all possible event types
+    const eventTypes = [
+      'process_started', 'status_update', 'portia_planning', 
+      'portia_plan_created', 'portia_plan_complete', 'not_enough_context', 
+      'questions_generated', 'fact_checking_started', 'checking_question',
+      'fact_checking_complete', 'fact_check_result', 'judging_started',
+      'judgment_complete', 'process_complete', 'error', 'portia_internal'
+    ];
+    
+    // Generic handler for all events
+    const handleUpdate = (data: ProcessUpdate) => {
+      console.log('Received update:', data);
+      
+      // Add to progress updates
+      setProgressUpdates(prev => [...prev, data]);
+      
+      // Update progress percentage if available
+      if (data.progress !== undefined) {
+        setProgressPercent(data.progress);
+      }
+      
+      // Update current stage
+      if (data.stage) {
+        setCurrentStage(data.stage);
+      }
+      
+      // Handle complete event - update final result
+      if (data.stage === 'complete' && data.result) {
+        setResult(data.result);
+        setLoading(false);
+        setProcessingQueryId(null);
+        
+        // Add to conversation if not already there
+        const queryId = "initial-query";
+        setConversation(prev => {
+          // Check if we already have this response
+          if (!prev.some(m => m.id === `response-${queryId}`)) {
+            return [...prev, { id: `response-${queryId}`, type: 'response', content: data.result }];
+          }
+          return prev;
+        });
+      }
+      
+      // Handle error case
+      if (data.stage === 'error') {
+        setLoading(false);
+        setProcessingQueryId(null);
+      }
+    };
+    
+    // Register handlers for all event types
+    eventTypes.forEach(eventType => {
+      channel.bind(eventType, handleUpdate);
+    });
+    
+    // Cleanup on unmount or id change
+    return () => {
+      eventTypes.forEach(eventType => {
+        channel.unbind(eventType, handleUpdate);
+      });
+      pusherRef.current.unsubscribe(`fact-check-${params.id}`);
+    };
+  }, [params.id]);
+
   // This function processes the original query or follow-up questions
   const processUserQuery = async (query: string, queryId: string) => {
     try {
@@ -143,8 +260,13 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
       setLoading(true);
       setProcessingQueryId(queryId);
       
+      // Reset progress tracking for new queries
+      setProgressUpdates([]);
+      setProgressPercent(0);
+      setCurrentStage('waiting');
+      
       // Create a promise for the processing and store it in the cache
-      const processPromise = processContent(query).then(result => {
+      const processPromise = processContent(query, params.id).then(result => {
         if (result.error) {
           throw new Error(result.error);
         }
@@ -204,8 +326,12 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
         
         throw error;
       }).finally(() => {
-        setLoading(false);
-        setProcessingQueryId(null);
+        // Only update loading state if we didn't get streamed updates
+        if (progressPercent < 100) {
+          setLoading(false);
+          setProcessingQueryId(null);
+        }
+        
         // Remove this request from the cache after it's complete
         delete requestCacheRef.current[cacheKey];
       });
@@ -591,6 +717,45 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
     }
   };
 
+  // Render the progress log component
+  const renderProgressLog = () => {
+    if (!showProcessLog) return null;
+    
+    return (
+      <div className="mt-4 p-4 bg-gray-900 text-gray-200 rounded-xl overflow-y-auto max-h-64 font-mono text-sm">
+        <div className="flex justify-between items-center mb-2">
+          <h3 className="text-gray-400 font-semibold">Processing Log</h3>
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            className="text-gray-400 hover:text-white p-1 h-auto"
+            onClick={() => setShowProcessLog(false)}
+          >
+            Hide
+          </Button>
+        </div>
+        <div className="space-y-2">
+          {progressUpdates.map((update, i) => (
+            <div key={i} className="border-l-2 border-gray-700 pl-3 py-1">
+              <div className="flex justify-between">
+                <span className="font-bold text-indigo-400">{update.stage}</span>
+                {update.progress && (
+                  <span className="text-gray-400">{update.progress}%</span>
+                )}
+              </div>
+              <p className="text-gray-300">{update.message}</p>
+              {update.plan && (
+                <pre className="mt-1 p-2 bg-gray-800 rounded text-xs overflow-x-auto">
+                  {update.plan.substring(0, 200)}...
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="container mx-auto px-4 py-8 min-h-[calc(100vh-4rem)] flex flex-col">
       <Card className="flex-grow flex flex-col overflow-hidden bg-white rounded-2xl shadow-lg border-0">
@@ -604,6 +769,16 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
             </CardTitle>
             
             <div className="flex items-center gap-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="gap-1 rounded-lg border-gray-200"
+                onClick={() => setShowProcessLog(!showProcessLog)}
+              >
+                <Terminal className="h-4 w-4" />
+                {showProcessLog ? 'Hide Log' : 'Show Log'}
+              </Button>
+              
               <Button 
                 variant="outline" 
                 size="sm" 
@@ -629,6 +804,25 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
               </Button>
             </div>
           </div>
+          
+          {/* Progress bar for processing */}
+          {loading && (
+            <div className="mt-3">
+              <div className="flex justify-between text-xs mb-1">
+                <span className="font-medium text-gray-700">{currentStage}</span>
+                <span className="text-gray-500">{progressPercent}%</span>
+              </div>
+              <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-300" 
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+            </div>
+          )}
+          
+          {/* Progress log */}
+          {renderProgressLog()}
         </CardHeader>
         
         <CardContent className="flex-grow overflow-y-auto py-6 px-4 md:px-6">
@@ -637,7 +831,55 @@ export default function ResultsPage({ params }: { params: { id: string } }) {
             {conversation.map((message, index) => renderMessage(message, index))}
             
             {/* Loading Indicator */}
-            {loading && (
+            {loading && progressUpdates.length > 0 && (
+              <div 
+                className="flex items-start gap-3 p-4 mb-4 bg-blue-50 rounded-xl border border-blue-100 animate-fadeIn shadow-sm"
+              >
+                <div className="mt-1">
+                  <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+                </div>
+                <div className="flex-1">
+                  {/* Main update message */}
+                  <p className="text-blue-700 font-medium">
+                    {progressUpdates[progressUpdates.length - 1]?.message || "Processing..."}
+                  </p>
+                  
+                  {/* Detailed operation description */}
+                  <p className="text-sm text-blue-500 mt-1">
+                    {progressUpdates[progressUpdates.length - 1]?.detail || `Stage: ${currentStage} (${progressPercent}% complete)`}
+                  </p>
+
+                  {/* Show Portia's internal operations if available */}
+                  {progressUpdates.length > 1 && 
+                    progressUpdates
+                      .slice(-8) // Get the last 8 updates
+                      .filter(update => update.operation) // Only show those with operation property
+                      .slice(-3) // Take just the 3 most recent operation updates
+                      .map((update, i) => (
+                        <div key={i} className="mt-2 p-2 bg-blue-100 rounded-lg text-xs font-mono">
+                          <div className="flex items-center">
+                            <span className="text-blue-800 font-semibold">{update.operation}:</span>
+                            <span className="text-blue-600 ml-1">{update.message}</span>
+                          </div>
+                          {update.tool && (
+                            <span className="block mt-1 text-blue-700">
+                              <span className="font-semibold">Tool:</span> {update.tool}
+                            </span>
+                          )}
+                          {update.step && (
+                            <span className="block mt-1 text-blue-700 truncate">
+                              <span className="font-semibold">Step:</span> {update.step.length > 50 ? update.step.substring(0, 50) + '...' : update.step}
+                            </span>
+                          )}
+                        </div>
+                      ))
+                  }
+                </div>
+              </div>
+            )}
+            
+            {/* Basic loading indicator if no updates yet */}
+            {loading && progressUpdates.length === 0 && (
               <div 
                 className="flex items-center gap-3 p-4 mb-4 bg-blue-50 rounded-xl border border-blue-100 animate-fadeIn"
               >

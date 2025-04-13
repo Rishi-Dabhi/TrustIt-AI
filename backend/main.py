@@ -128,14 +128,14 @@ async def process_content(content: str, config: Dict[str, Any]) -> Dict[str, Any
         return {"error": str(e)}
 
 # New function that uses Portia integration
-async def process_content_with_portia(content: str, config: Dict[str, Any]) -> Dict[str, Any]:
+async def process_content_with_portia(content: str, config: Dict[str, Any], session_id: str = None) -> Dict[str, Any]:
     """Process content through the Portia-based agent pipeline"""
     try:
         print("\nInitializing Portia fact checker...")
         portia_checker = PortiaFactChecker(config)
         
-        print("\nProcessing content with Portia...")
-        result = await portia_checker.process_content(content)
+        print(f"\nProcessing content with Portia... Session ID: {session_id or 'None'}")
+        result = await portia_checker.process_content(content, session_id)
         
         return result
         

@@ -39,14 +39,14 @@ This application integrates Portia's agent capabilities with Tavily's search API
    
    # Activate the virtual environment:
    # On Linux/Mac:
-   source portia-env-py311/bin/activate
+   source backend/portia-env-py311/bin/activate
    # On Windows:
    portia-env-py311\Scripts\activate
 
 4. Install dependencies
 
    ```
-   pip install portia-ai python-dotenv google-generativeai requests pydantic
+   pip install portia-sdk-python[google] fastapi tavily-sdk pusher
    ```
 
 5. Create a `.env` file in the project root with the following API keys:

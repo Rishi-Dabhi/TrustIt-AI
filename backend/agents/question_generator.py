@@ -46,10 +46,10 @@ class QuestionGeneratorAgent:
                 print("-" * 30 + "\n\n")
 
                 # Check for the special "NOT_FACT_CHECKABLE" response
-                if "not enough context" in response.text.upper():
+                if "not enough context" in response.text:
                     print("Content does not contain factual claims that can be verified.")
                     return ["not enough context"]
-                elif response.text.lower().strip().contains("NOT_FACT_CHECKABLE"):
+                elif response.text.lower().strip() in ("not_fact_checkable"):
                     print("Gemini indicated that the user query is not enough context to generate questions.")
                     return ["not enough context"]
                 else:
