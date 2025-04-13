@@ -25,10 +25,10 @@ logger.info(f"Gemini API Rate Limiter: delay={gemini_limiter.base_delay}s, retri
 
 app = FastAPI()
 
-# Configure CORS
+# Configure CORS - Update to allow Vercel domains
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001", "https://*.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -91,6 +91,11 @@ async def get_info():
             }
         ]
     }
+
+# Add a root endpoint for Vercel health checks
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "TrustIt-AI API is running"}
 
 if __name__ == "__main__":
     import uvicorn
