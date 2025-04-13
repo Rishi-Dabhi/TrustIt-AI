@@ -1,0 +1,11 @@
+**/*.pyc
+**/__pycache__/**
+.env
+.git/**
+.venv/**
+portia-env-py311/**
+node_modules/**
+tests/**
+**/.DS_Store
+.idea/**
+.vscode/** 

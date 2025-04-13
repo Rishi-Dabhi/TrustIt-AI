@@ -33,23 +33,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // Get initial session
     const initializeAuth = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      setSession(session)
-      setUser(session?.user || null)
-      setLoading(false)
-
-      // Listen for auth changes
-      const {
-        data: { subscription },
-      } = await supabase.auth.onAuthStateChange((_event, session) => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
         setSession(session)
         setUser(session?.user || null)
-      })
+      } catch (error) {
+        console.warn('Error getting session:', error)
+      } finally {
+        setLoading(false)
+      }
 
-      return () => {
-        subscription.unsubscribe()
+      try {
+        // Listen for auth changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+          setSession(session)
+          setUser(session?.user || null)
+        })
+
+        return () => {
+          subscription.unsubscribe()
+        }
+      } catch (error) {
+        console.warn('Error setting up auth listener:', error)
       }
     }
 
@@ -57,34 +62,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) throw error
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) throw error
+    } catch (error) {
+      console.warn('Error signing in:', error)
+    }
   }
 
   const signUp = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({ email, password })
-    if (error) throw error
+    try {
+      const { error } = await supabase.auth.signUp({ email, password })
+      if (error) throw error
+    } catch (error) {
+      console.warn('Error signing up:', error)
+    }
   }
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut()
-    if (error) throw error
+    try {
+      const { error } = await supabase.auth.signOut()
+      if (error) throw error
+    } catch (error) {
+      console.warn('Error signing out:', error)
+    }
   }
 
   const deleteAccount = async () => {
-    if (!user) throw new Error("No user is currently signed in")
+    if (!user) {
+      console.warn('No user is currently signed in')
+      return
+    }
 
     try {
-      // Delete user data from Supabase database
-      // This would be implemented based on your data structure
-      // await supabase.from('user_settings').delete().eq('user_id', user.id)
-      // await supabase.from('analyses').delete().eq('user_id', user.id)
-
-      // Sign out the user
       await supabase.auth.signOut()
     } catch (error) {
-      console.error("Error deleting account:", error)
-      throw error
+      console.warn('Error deleting account:', error)
     }
   }
 
